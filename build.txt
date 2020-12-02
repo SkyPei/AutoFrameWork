@@ -1,0 +1,4 @@
+dotnet pack /p:Version=0.5.5
+nuget push C:\temp\ApiFrameWork\ApiFrameWork_009\bin\Debug\ApiFrameWork.0.5.5.nupkg 43420024420 -Source http://sd-41ns-6tag.nam.nsroot.net/AutoScriptRepository/nuget
+
+nuget delete ApiFrameWork 0.5.5 -Source http://sd-41ns-6tag.nam.nsroot.net/AutoScriptRepository/nuget -apikey 43420024420

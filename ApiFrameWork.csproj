@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>netcoreapp2.1</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NPOI" Version="2.4.1"/>
+    <PackageReference Include="Newtonsoft.Json" Version="10.0.3"/>
+    <PackageReference Include="System.Drawing.Common" Version="4.5.1"/>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Remove="Report\report.html"/>
+     <Content Remove="Report\log.html"/>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Report\report.html"/>
+     <EmbeddedResource Include="Report\log.html"/>
+  </ItemGroup>
+</Project>
