@@ -1,18 +1,21 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using ApiFrameWork.Schema;
+using AutoFrameWork.Schema;
 using System.Linq;
 using System.Data;
-using ApiFrameWork.Utility;
-using ApiFrameWork.Report;
+using AutoFrameWork.Utility;
+using AutoFrameWork.Report;
 using System.Text.RegularExpressions;
 using System.IO;
 using Newtonsoft.Json;
+using System.Threading.Tasks;
+using System.Drawing.Drawing2D;
+using NPOI.HPSF;
 
-namespace ApiFrameWork.Command
+namespace AutoFrameWork.Command
 {
-    public class RunCommand : BaseCommand
+    public class RunCommand : BaseCommand, IJsonCommand
     {
         [Command]
         public string file
@@ -33,6 +36,14 @@ namespace ApiFrameWork.Command
             get; set;
         }
 
+        [Command]
+
+        public string scriptid
+        {
+            get; set;
+        } = null;
+
+        private object obj = new object();
 
         public override void Help()
         {
@@ -46,16 +57,33 @@ namespace ApiFrameWork.Command
             Console.WriteLine("  --file                   Specifies the data file for single script execution only, will replce the original data file which was made in script.");
             Console.WriteLine("  --sheet                  Specifies the sheet of data file for single script execution only, will replce the original sheet which was made in script.");
             Console.WriteLine("  --schedule               Specifies the running time of scripts, format is HHmm, like 0830 means 08:30.");
+            Console.WriteLine("  --scriptid               Specifies the scriptid of scripts , filter by script_id, when use this parameter, must be run with script name. This will disable the filter to only select isenabled=Y");
         }
-        public override void Run()
+        public override bool Run()
         {
             throw new NotImplementedException();
         }
 
 
-
-        public override void Run(string args)
+        private System.Exception GetInnerException(System.Exception ex)
         {
+            if (ex.InnerException == null)
+            {
+                return ex;
+            }
+            else
+            {
+                return GetInnerException(ex.InnerException);
+            }
+        }
+        public override bool Run(string args)
+        {
+
+            if (string.IsNullOrWhiteSpace(scriptid))
+            {
+                scriptid = null;
+            }
+
             Regex regjson = new Regex(@"(^|[ ]+)[\S ]+\.json($|)", RegexOptions.IgnoreCase);
 
 
@@ -84,6 +112,36 @@ namespace ApiFrameWork.Command
                     throw new Exception.CommandPaseException($"Parse template error");
                 }
 
+                Console.WriteLine("validate batch file setup...");
+
+                foreach (var batchitem in btemplate.Batch)
+                {
+                    foreach (var groupitem in batchitem.Groups)
+                    {
+                        Console.WriteLine($"Script:{groupitem.name}");
+                        string currentfile = groupitem.File;
+                        string currentsheet = groupitem.Sheet;
+                        var scriptinfo = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == groupitem.name)?.GetCustomAttribute<Schema.ScriptAttribute>();
+                        if (scriptinfo == null)
+                        {
+                            Console.WriteLine("script is not found, please double check.");
+                            throw new System.Exception($"script {{{groupitem.name}}} is not found.");
+                        }
+                        Console.WriteLine("script is found.");
+
+                        if (string.IsNullOrEmpty(currentfile))
+                        {
+                            currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+
+                        }
+                        if (string.IsNullOrEmpty(currentsheet))
+                        {
+                            currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                        }
+                    }
+                }
+
+
                 // add schedule runing 
                 if (!string.IsNullOrWhiteSpace(btemplate.Schedule))
                 {
@@ -102,661 +160,1765 @@ namespace ApiFrameWork.Command
 
                 }
 
-                Dictionary<string, Type> names = new Dictionary<string, Type>();
-                foreach (var item in List)
-                {
-                    var attribute = item.GetCustomAttribute<ScriptAttribute>();
-                    string name = attribute == null ? item.Name.ToLower() : attribute.DisplayName.ToLower();
-                    names.Add(name, item);
-                }
+                DateTime curr = DateTime.Now;
 
 
-                ReportModel rm = new ReportModel();
+                ReportModel rm = new ReportModel(Upload, true);
                 rm.StartTime = DateTime.Now;
                 rm.TestCases = new List<ReportItem>();
                 LaunchConfig config = LaunchConfig.GetInstance();
-                foreach (var batch in btemplate.Batch)
+
+                if (btemplate.IsAsync)
                 {
+                    int asyncrdindex = 0;
+
+                    Utility.ThreadPool pool = new ThreadPool(btemplate.MaxThreads);
+
+                    int dependencyindex = 0;
 
 
-                    if (batch.IsDependencyQueue)
+
+                    foreach (var batch in btemplate.Batch)
                     {
-                        int maxsupporteddatalen = 0;
-                        if (batch.Groups.Count > 0)
+
+                        if (batch.IsDependencyQueue)
                         {
-                            string currentfile = batch.Groups[0].File;
-                            string currentsheet = batch.Groups[0].Sheet;
-                            var type = names.FirstOrDefault(t => t.Key == batch.Groups[0].name.ToLower()).Value;
+                            int maxsupporteddatalen = 0;
+                            if (batch.Groups.Count > 0)
+                            {
+                                string currentfile = batch.Groups[0].File;
+                                string currentsheet = batch.Groups[0].Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
 
-                            if (type == null)
-                            {
-                                Console.WriteLine($"Not Found Script {{{batch.Groups[0].name}}}");
-                                continue;
-                            }
-                            if (type.GetConstructors().Count() > 1)
-                            {
-                                Console.WriteLine($"Script {{{batch.Groups[0].name}}} Error as more than 1 Constructor.");
-                                continue;
-                            }
-
-                            var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
-                            if (string.IsNullOrEmpty(currentfile))
-                            {
-                                currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
-                            }
-                            if (string.IsNullOrEmpty(currentsheet))
-                            {
-                                currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
-                            }
-
-                            DataProvider dp = new DataProvider(currentfile, currentsheet);
-                            ProviderModel dt = dp.ExtractData(batch.Groups[0].name);
-                            var list = dt.list.Where(t => t.IsEnabled).ToList();
-                            maxsupporteddatalen = list.Count;
-
-                            for (int n = 0; n < maxsupporteddatalen; n++)
-                            {
-                                foreach (var item in batch.Groups)
+                                if (type == null)
                                 {
-                                    string currentrunfile = item.File;
-                                    string currentrunsheet = item.Sheet;
+                                    Console.WriteLine($"Not Found Script {{{batch.Groups[0].name}}}");
+                                    continue;
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{batch.Groups[0].name}}} Error as more than 1 Constructor.");
+                                    continue;
+                                }
 
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
 
-                                    var runtype = names.FirstOrDefault(t => t.Key == item.name.ToLower()).Value;
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
+                                ProviderModel dt = dp.ExtractData(batch.Groups[0].name, batch.Groups[0].scriptid);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                maxsupporteddatalen = list.Count;
 
-                                    if (runtype == null)
+                                for (int n = 0; n < maxsupporteddatalen; n++)
+                                {
+                                    dependencyindex++;
+                                    var queue = new Queue<BatchScriptModel>();
+                                    foreach (var item in batch.Groups)
                                     {
-                                        Console.WriteLine($"Not Found Script {{{item.name}}}");
-                                        break;
-                                    }
+                                        BatchScriptModel model = new BatchScriptModel();
+                                        model.Id = dependencyindex;
+                                        model.Index = n;
+                                        model.Name = item.name;
+                                        model.File = item.File;
+                                        model.Sheet = item.Sheet;
+                                        model.ScriptId = item.scriptid;
 
-                                    var runscriptinfo = runtype.GetCustomAttribute<ScriptAttribute>();
-                                    if (string.IsNullOrEmpty(currentrunfile))
-                                    {
-                                        currentrunfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(runscriptinfo.DataFile) ? this.DataFile : runscriptinfo.DataFile : btemplate.File;
+                                        queue.Enqueue(model);
                                     }
-                                    if (string.IsNullOrEmpty(currentrunsheet))
-                                    {
-                                        currentrunsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(runscriptinfo.SheetName) ? this.SheetName : runscriptinfo.SheetName : btemplate.Sheet;
-                                    }
+                                    pool.DependencyQueues.Add(queue);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            foreach (var item in batch.Groups)
+                            {
+                                string currentfile = batch.Groups[0].File;
+                                string currentsheet = batch.Groups[0].Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+                                if (type == null)
+                                {
+                                    Console.WriteLine($"Not Found Script {{{batch.Groups[0].name}}}");
+                                    continue;
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{batch.Groups[0].name}}} Error as more than 1 Constructor.");
+                                    continue;
+                                }
 
-                                    DataProvider rundp = new DataProvider(currentrunfile, currentrunsheet);
-                                    ProviderModel rundt = rundp.ExtractData(item.name);
-                                    var runlist = rundt.list.Where(t => t.IsEnabled).ToList();
-                                    if (runlist.Count < n)
-                                    {
-                                        break;
-                                    }
-                                    ReportItem testcase = rm.TestCases.FirstOrDefault(t => t.Name == item.name);
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
+
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
+                                ProviderModel dt = dp.ExtractData(batch.Groups[0].name, batch.Groups[0].scriptid);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                int maxsupporteddatalen = list.Count;
+
+                                for (int n = 0; n < maxsupporteddatalen; n++)
+                                {
+
+
+                                    BatchScriptModel model = new BatchScriptModel();
+                                    model.Id = dependencyindex;
+                                    model.Index = n;
+                                    model.Name = item.name;
+                                    model.File = item.File;
+                                    model.Sheet = item.Sheet;
+                                    model.ScriptId = item.scriptid;
+
+
+                                    pool.NonDepQueue.Enqueue(model);
+                                }
+                            }
+                        }
+                    }
+
+
+                    List<Task<Tuple<bool?, int>>> tasks = new List<Task<Tuple<bool?, int>>>();
+
+                    for (int n = 0; n < btemplate.MaxThreads; n++)
+                    {
+                        var task = Task.Factory.StartNew<Tuple<bool?, int>>((d) =>
+                        {
+                            ReportItem testcase = null;
+                            BatchScriptModel model = pool.Next((int)d);
+
+                            if (model != null)
+                            {
+                                lock (obj)
+                                {
+                                    testcase = rm.TestCases.FirstOrDefault(t => t.Name == model.Name);
                                     if (testcase == null)
                                     {
                                         testcase = new ReportItem();
-                                        testcase.Name = item.name;
+                                        testcase.Name = model.Name;
                                         testcase.Details = new List<ReportItemDetail>();
                                         rm.TestCases.Add(testcase);
                                     }
+                                }
+                                string currentfile = model.File;
+                                string currentsheet = model.Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == model.Name);
+                                if (type == null)
+                                {
+                                    Console.WriteLine($"Not Found Script {{{model.Name}}}");
+                                    return new Tuple<bool?, int>(false, (int)d);
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{model.Name}}} Error as more than 1 Constructor.");
+                                    return new Tuple<bool?, int>(false, (int)d);
+                                }
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                testcase.Creator = scriptinfo.Creator;
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
 
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
 
+                                ProviderModel dt = dp.ExtractData(model.Name, model.ScriptId);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                if (list.Count < model.Index)
+                                {
+                                    return new Tuple<bool?, int>(false, (int)d);
+                                }
 
+                                int additionaldatasourceCount = 1;
+                                DataSource ds = null;
+                                System.Collections.IList additionaldatasource = null;
+
+                                if (scriptinfo.DataSource != null && scriptinfo.DataSource.BaseType == typeof(DataSource))
+                                {
+                                    try
+                                    {
+                                        ds = Activator.CreateInstance(scriptinfo.DataSource) as DataSource;
+                                        additionaldatasource = ds.ReadDataSource(scriptinfo.DisplayName, list[model.Index].Dict);
+                                        additionaldatasourceCount = additionaldatasource.Count;
+                                    }
+                                    catch (System.Exception edatasource)
+                                    {
+                                        Console.WriteLine(edatasource.Message);
+                                        Console.WriteLine(edatasource.StackTrace);
+                                        additionaldatasourceCount = 0;
+                                    }
+
+                                    if (additionaldatasourceCount == 0)
+                                    {
+                                        Console.WriteLine("Read additional DataSource is 0.");
+                                        return new Tuple<bool?, int>(false, (int)d);
+
+                                    }
+                                }
+                                bool executedstatus = true;
+                                for (int xx = 0; xx < additionaldatasourceCount; xx++)
+                                {
+                                    int rdindex;
+                                    lock (obj)
+                                    {
+                                        asyncrdindex++;
+                                        rdindex = asyncrdindex;
+                                    }
 
                                     ReportItemDetail rd = new ReportItemDetail();
+                                    DateTime startTime = DateTime.Now;
+
                                     testcase.Details.Add(rd);
                                     string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
-                                    //启动日志
+                                    ScriptEventArgs scripteventargs = new ScriptEventArgs();
+                                    scripteventargs.Name = model.Name;
+                                    scripteventargs.ScriptId = model.ScriptId;
 
-                                    using (Log.Log log = Log.Log.GetLog($"{item.name}_{currentdate}_{n}", config.LogFolderPath))
+                                    //init log
+
+                                    using (Log.Log log = Log.Log.GetLog($"{model.Name}_{currentdate}_{n}", config.LogFolderPath))
                                     {
                                         using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
                                         {
-                                            bool isbreak = false;
-                                            Script script = null;
+
+                                            IScript script = null;
                                             try
                                             {
 
-                                                script = Activator.CreateInstance(runtype) as Script;
-                                                script.Log = log;
+                                                script = Activator.CreateInstance(type) as IScript;
 
-                                                script.Test(runlist[n].Dict);
-                                                var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
-                                                foreach (var parameter in parameters)
+                                                script.PropertyAssignment("Log", log);
+                                                if (ds != null)
                                                 {
-                                                    var objvalue = parameter.GetValue(script);
-                                                    if (objvalue != null)
+                                                    var inobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceInAttribute>() != null);
+                                                    if (inobjectfield != null)
                                                     {
-                                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
-                                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
-                                                        if (parobj != null)
+                                                        try
                                                         {
-                                                            MethodInfo handlerMethod = returntype.GetProperty("EndHandle").GetValue(parobj).GetType().GetMethod("Invoke");
-                                                            handlerMethod.Invoke(returntype.GetProperty("EndHandle").GetValue(parobj), new object[] { objvalue, log });
+                                                            inobjectfield.SetValue(script, additionaldatasource[xx]);
+                                                        }
+                                                        catch (System.Exception econvert)
+                                                        {
+                                                            Console.WriteLine(econvert.Message);
                                                         }
                                                     }
                                                 }
 
-                                                testcase.Pass += 1;
-                                                rd.Status = "Pass";
-                                                if (string.IsNullOrEmpty(script.Country))
+
+
+
+                                                script.Test(list[model.Index].Dict);
+                                                var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+                                                foreach (var parameter in parameters)
                                                 {
-                                                    var countrydata = runlist[n].Dict.FirstOrDefault(t => "country" == t.Key.ToLower());
-                                                    if (!string.IsNullOrEmpty(countrydata.Value))
+                                                    var objvalue = parameter.GetValue(script);
+                                                    var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                    var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                    if (parobj != null)
                                                     {
-                                                        rd.Country = countrydata.Value;
+                                                        var handler = returntype.GetProperty("EndHandle").GetValue(parobj);
+
+                                                        if (handler != null)
+                                                        {
+                                                            MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                            try
+                                                            {
+                                                                handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                            }
+                                                            catch (System.Exception eh)
+                                                            {
+                                                                var ehinner = GetInnerException(eh);
+                                                                Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            var handlerasync = returntype.GetProperty("EndHandleAsync").GetValue(parobj);
+                                                            if (handlerasync != null)
+                                                            {
+                                                                MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                    task.Wait();
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                        }
                                                     }
 
-
-                                                }
-                                                else
-                                                {
-                                                    rd.Country = script.Country;
-
                                                 }
 
-                                                if (string.IsNullOrEmpty(script.CaseId))
-                                                {
-                                                    var caseiddata = runlist[n].Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
-                                                    if (!string.IsNullOrEmpty(caseiddata.Value))
-                                                    {
-                                                        rd.CaseId = caseiddata.Value;
-                                                    }
-                                                }
-                                                else
-                                                {
-                                                    rd.CaseId = script.CaseId;
-
-                                                }
-
-                                                if (string.IsNullOrEmpty(script.ReportName))
-                                                {
-                                                    var reportnamedata = runlist[n].Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
-                                                    if (!string.IsNullOrEmpty(reportnamedata.Value))
-                                                    {
-                                                        rd.Name = reportnamedata.Value;
-                                                    }
-
-
-                                                }
-                                                else
-                                                {
-                                                    rd.Name = script.ReportName;
-
-                                                }
+                                                testcase.PassAdd();
+                                                rd.Status = ScriptStatus.Pass;
                                             }
                                             catch (Exception.AssertionException e)
                                             {
                                                 Console.WriteLine(e.Message);
-                                                testcase.Fail += 1;
-                                                rd.Status = "Fail";
+                                                testcase.FailAdd();
+                                                executedstatus = false;
+                                                rd.Status = ScriptStatus.Fail;
                                                 rd.ErrorMessage = e.Message;
-                                                if (string.IsNullOrEmpty(script.Country))
-                                                {
-                                                    var countrydata = runlist[n].Dict.FirstOrDefault(t => "country" == t.Key.ToLower());
-                                                    if (!string.IsNullOrEmpty(countrydata.Value))
-                                                    {
-                                                        rd.Country = countrydata.Value;
-                                                    }
-                                                }
-                                                else
-                                                {
-                                                    rd.Country = script.Country;
 
-                                                }
-
-                                                if (string.IsNullOrEmpty(script.CaseId))
-                                                {
-                                                    var caseiddata = runlist[n].Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
-                                                    if (!string.IsNullOrEmpty(caseiddata.Value))
-                                                    {
-                                                        rd.CaseId = caseiddata.Value;
-                                                    }
-                                                }
-                                                else
-                                                {
-                                                    rd.CaseId = script.CaseId;
-
-                                                }
-                                                if (string.IsNullOrEmpty(script.ReportName))
-                                                {
-                                                    var reportnamedata = runlist[n].Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
-                                                    if (!string.IsNullOrEmpty(reportnamedata.Value))
-                                                    {
-                                                        rd.Name = reportnamedata.Value;
-                                                    }
-
-
-                                                }
-                                                else
-                                                {
-                                                    rd.Name = script.ReportName;
-
-                                                }
-
-
-                                                isbreak = true;
                                                 var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
                                                 foreach (var parameter in parameters)
                                                 {
                                                     var objvalue = parameter.GetValue(script);
-                                                    if (objvalue != null)
+                                                    var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                    var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                    if (parobj != null)
                                                     {
-                                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
-                                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
-                                                        if (parobj != null)
+                                                        var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                        if (handler != null)
                                                         {
-                                                            MethodInfo handlerMethod = returntype.GetProperty("EndHandle").GetValue(parobj).GetType().GetMethod("Invoke");
-                                                            handlerMethod.Invoke(returntype.GetProperty("EndHandle").GetValue(parobj), new object[] { objvalue, log });
+                                                            MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                            try
+                                                            {
+                                                                handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                            }
+                                                            catch (System.Exception eh)
+                                                            {
+                                                                var ehinner = GetInnerException(eh);
+                                                                Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                            if (handlerasync != null)
+                                                            {
+                                                                MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                    task.Wait();
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                 }
-                                                log.Info("-------------------------Failed------------------------\r\n");
+                                                log.Info("------------------------------------Failed------------------------------------\r\n");
                                                 log.Info($"{e.Message}\r\n");
-                                                log.Info("-------------------------Tracking---------------------\r\n");
+                                                log.Info("------------------------------------Tracking------------------------------------\r\n");
                                                 log.Info($"{e.StackTrace}\r\n");
 
+                                                scripteventargs.Message = e.Message;
+                                                scripteventargs.Trace = e.StackTrace?.ToString();
                                             }
                                             catch (System.Exception e)
                                             {
                                                 var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
                                                 foreach (var parameter in parameters)
                                                 {
                                                     var objvalue = parameter.GetValue(script);
-                                                    if (objvalue != null)
+                                                    var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                    var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                    if (parobj != null)
                                                     {
-                                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
-                                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
-                                                        if (parobj != null)
+                                                        var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                        if (handler != null)
                                                         {
-                                                            MethodInfo handlerMethod = returntype.GetProperty("EndHandle").GetValue(parobj).GetType().GetMethod("Invoke");
-                                                            handlerMethod.Invoke(returntype.GetProperty("EndHandle").GetValue(parobj), new object[] { objvalue, log });
+                                                            MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                            try
+                                                            {
+                                                                handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                            }
+                                                            catch (System.Exception eh)
+                                                            {
+                                                                var ehinner = GetInnerException(eh);
+                                                                Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                            if (handlerasync != null)
+                                                            {
+                                                                MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                    task.Wait();
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                 }
-
                                                 var innerex = GetInnerException(e);
-                                                log.Info("-------------------------Error------------------------\r\n");
+                                                log.Info("------------------------------------Error------------------------------------\r\n");
                                                 log.Info($"{innerex.Message}\r\n");
-                                                log.Info("-------------------------Tracking---------------------\r\n");
+                                                log.Info("------------------------------------Tracking------------------------------------\r\n");
                                                 log.Info($"{innerex.StackTrace}\r\n");
                                                 Console.WriteLine(innerex.Message);
-                                                testcase.Error += 1;
-                                                rd.Status = "Error";
-                                                rd.ErrorMessage = e.Message;
-                                                if (string.IsNullOrEmpty(script.Country))
-                                                {
-                                                    var countrydata = runlist[n].Dict.FirstOrDefault(t => "country" == t.Key.ToLower());
-                                                    if (!string.IsNullOrEmpty(countrydata.Value))
-                                                    {
-                                                        rd.Country = countrydata.Value;
-                                                    }
-                                                }
-                                                else
-                                                {
-                                                    rd.Country = script.Country;
+                                                testcase.ErrorAdd();
+                                                executedstatus = false;
+                                                rd.Status = ScriptStatus.Error;
+                                                rd.ErrorMessage = innerex.Message;
 
-                                                }
+                                                scripteventargs.Message = innerex.Message;
+                                                scripteventargs.Trace = innerex.StackTrace?.ToString();
 
-                                                if (string.IsNullOrEmpty(script.CaseId))
-                                                {
-                                                    var caseiddata = runlist[n].Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
-                                                    if (!string.IsNullOrEmpty(caseiddata.Value))
-                                                    {
-                                                        rd.CaseId = caseiddata.Value;
-                                                    }
-                                                }
-                                                else
-                                                {
-                                                    rd.CaseId = script.CaseId;
-
-                                                }
-                                                if (string.IsNullOrEmpty(script.ReportName))
-                                                {
-                                                    var reportnamedata = runlist[n].Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
-                                                    if (!string.IsNullOrEmpty(reportnamedata.Value))
-                                                    {
-                                                        rd.Name = reportnamedata.Value;
-                                                    }
-
-
-                                                }
-                                                else
-                                                {
-                                                    rd.Name = script.ReportName;
-
-                                                }
-
-                                                isbreak = true;
                                             }
-                                            testcase.Count += 1;
-                                            rd.Log = log.Stores.Clone();
-                                            rd.Data = runlist[n].Dict;
-                                            if (isbreak)
+
+                                            scripteventargs.Data = JsonConvert.DeserializeObject<AFWDictionary<string>>(JsonConvert.SerializeObject(list[model.Index].Dict));
+                                            scripteventargs.Status = rd.Status;
+                                            scripteventargs.AdditionalInfo = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+
+                                            if (string.IsNullOrEmpty(script.PropertyValue<string>("CaseId")))
                                             {
-                                                break;
+                                                var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
+                                                if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                {
+                                                    script.PropertyAssignment("CaseId", caseiddata.Value);
+                                                }
                                             }
+
+                                            if (string.IsNullOrEmpty(script.PropertyValue<string>("ReportName")))
+                                            {
+                                                var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
+                                                if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                {
+                                                    script.PropertyAssignment("ReportName", caseiddata.Value);
+                                                }
+                                            }
+
+                                            rd.Name = script.PropertyValue<string>("ReportName");
+
+                                            if (string.IsNullOrEmpty(script.PropertyValue<string>("ScriptId")))
+                                            {
+                                                var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "scriptid" == t.Key.ToLower());
+                                                if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                {
+                                                    script.PropertyAssignment("ScriptId", caseiddata.Value);
+                                                }
+                                            }
+                                            log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                            log.InsertHTML($"<div>{model.Name}</div>\r\n");
+
+                                            scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
+
+                                            if (ds != null)
+                                            {
+                                                var outobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceOutAttribute>() != null);
+                                                object senddata = null;
+                                                if (outobjectfield != null)
+                                                {
+                                                    senddata = outobjectfield.GetValue(script);
+
+                                                }
+                                                try
+                                                {
+                                                    ds.WriteDataSource(scriptinfo.DisplayName, list[model.Index].Dict, senddata, rd.Status);
+                                                }
+                                                catch (System.Exception eDataSource)
+                                                {
+                                                    Console.WriteLine(eDataSource.Message);
+                                                    Console.WriteLine(eDataSource.StackTrace);
+                                                    log.Info("------------------------------------Additional Data Source Error------------------------------------\r\n");
+                                                    log.Info($"{eDataSource.Message}\r\n");
+                                                    log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                    log.Info($"{eDataSource.StackTrace}\r\n");
+                                                }
+
+                                            }
+
+                                            testcase.CountAdd();
+                                            rd.Log = log.Stores.Clone();
+                                            rd.Data = list[model.Index].Dict;
+                                            rd.Duration = DateTime.Now - startTime;
+
+
+                                            var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+                                            sai.SetMember("SetId", model.SetId);
+                                            rm.GenDetailReport($"{filename}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath, rd, rdindex, script, scripteventargs);
                                         }
                                     }
                                     try
                                     {
-                                        rundp.Update(dt);
+                                        dp.Update(dt);
                                     }
                                     catch (System.Exception ee)
                                     {
                                         Console.WriteLine(ee.Message);
                                     }
-
+                                    config.OnAfterScripotCompleted(scripteventargs);
                                 }
+                                return new Tuple<bool?, int>(executedstatus, (int)d);
+                            }
+                            else
+                            {
+                                return new Tuple<bool?, int>(null, (int)d);
+                            }
+                        }, n);
+                        tasks.Add(task);
+                    }
+                    int num = tasks.Count;
+
+                    while (num != 0)
+                    {
+                        var availbletasks = tasks.Where(t => t.Status == TaskStatus.RanToCompletion || t.Status == TaskStatus.Faulted || t.Status == TaskStatus.Canceled).ToList();
+
+                        foreach (var item in availbletasks)
+                        {
+                            tasks.Remove(item);
+                            Tuple<bool?, int> result = item.Result;
+                            if (result.Item1 != null)
+                            {
+                                var task = Task.Factory.StartNew<Tuple<bool?, int>>((d) =>
+                                {
+                                    ReportItem testcase = null;
+                                    BatchScriptModel model = pool.Next((int)d, !result.Item1.Value);
+
+                                    if (model != null)
+                                    {
+                                        lock (obj)
+                                        {
+                                            testcase = rm.TestCases.FirstOrDefault(t => t.Name == model.Name);
+                                            if (testcase == null)
+                                            {
+                                                testcase = new ReportItem();
+                                                testcase.Name = model.Name;
+                                                testcase.Details = new List<ReportItemDetail>();
+                                                rm.TestCases.Add(testcase);
+                                            }
+                                        }
+                                        string currentfile = model.File;
+                                        string currentsheet = model.Sheet;
+                                        var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == model.Name);
+                                        if (type == null)
+                                        {
+                                            Console.WriteLine($"Not Found Script {{{model.Name}}}");
+                                            return new Tuple<bool?, int>(false, (int)d);
+                                        }
+                                        if (type.GetConstructors().Count() > 1)
+                                        {
+                                            Console.WriteLine($"Script {{{model.Name}}} Error as more than 1 Constructor.");
+                                            return new Tuple<bool?, int>(false, (int)d);
+                                        }
+                                        var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                        testcase.Creator = scriptinfo.Creator;
+                                        if (string.IsNullOrEmpty(currentfile))
+                                        {
+                                            currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                        }
+                                        if (string.IsNullOrEmpty(currentsheet))
+                                        {
+                                            currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                        }
+
+                                        DataProvider dp = new DataProvider(currentfile, currentsheet);
+
+                                        ProviderModel dt = dp.ExtractData(model.Name, model.ScriptId);
+                                        var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                        if (list.Count < model.Index)
+                                        {
+                                            return new Tuple<bool?, int>(false, (int)d);
+                                        }
+
+                                        int additionaldatasourceCount = 1;
+                                        DataSource ds = null;
+                                        System.Collections.IList additionaldatasource = null;
+
+                                        if (scriptinfo.DataSource != null && scriptinfo.DataSource.BaseType == typeof(DataSource))
+                                        {
+                                            try
+                                            {
+                                                ds = Activator.CreateInstance(scriptinfo.DataSource) as DataSource;
+                                                additionaldatasource = ds.ReadDataSource(scriptinfo.DisplayName, list[model.Index].Dict);
+                                                additionaldatasourceCount = additionaldatasource.Count;
+                                            }
+                                            catch (System.Exception edatasource)
+                                            {
+                                                Console.WriteLine(edatasource.Message);
+                                                Console.WriteLine(edatasource.StackTrace);
+                                                additionaldatasourceCount = 0;
+                                            }
+
+                                            if (additionaldatasourceCount == 0)
+                                            {
+                                                Console.WriteLine("Read additional DataSource is 0.");
+                                                return new Tuple<bool?, int>(false, (int)d);
+
+                                            }
+                                        }
+                                        bool executedstatus = true;
+                                        for (int xx = 0; xx < additionaldatasourceCount; xx++)
+                                        {
+                                            int rdindex;
+                                            lock (obj)
+                                            {
+                                                asyncrdindex++;
+                                                rdindex = asyncrdindex;
+                                            }
+
+                                            ReportItemDetail rd = new ReportItemDetail();
+                                            DateTime startTime = DateTime.Now;
+
+                                            testcase.Details.Add(rd);
+                                            string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
+                                            ScriptEventArgs scripteventargs = new ScriptEventArgs();
+                                            scripteventargs.Name = model.Name;
+                                            scripteventargs.ScriptId = model.ScriptId;
+
+                                            //init log
+
+                                            using (Log.Log log = Log.Log.GetLog($"{model.Name}_{currentdate}_{(int)d}", config.LogFolderPath))
+                                            {
+                                                using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
+                                                {
+
+                                                    IScript script = null;
+                                                    try
+                                                    {
+
+                                                        script = Activator.CreateInstance(type) as IScript;
+
+                                                        script.PropertyAssignment("Log", log);
+                                                        if (ds != null)
+                                                        {
+                                                            var inobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceInAttribute>() != null);
+                                                            if (inobjectfield != null)
+                                                            {
+                                                                try
+                                                                {
+                                                                    inobjectfield.SetValue(script, additionaldatasource[xx]);
+                                                                }
+                                                                catch (System.Exception econvert)
+                                                                {
+                                                                    Console.WriteLine(econvert.Message);
+                                                                }
+                                                            }
+                                                        }
 
 
+
+
+                                                        script.Test(list[model.Index].Dict);
+                                                        var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("EndHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("EndHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+
+                                                        }
+
+                                                        testcase.PassAdd();
+                                                        rd.Status = ScriptStatus.Pass;
+                                                    }
+                                                    catch (Exception.AssertionException e)
+                                                    {
+                                                        Console.WriteLine(e.Message);
+                                                        testcase.FailAdd();
+                                                        executedstatus = false;
+                                                        rd.Status = ScriptStatus.Fail;
+                                                        rd.ErrorMessage = e.Message;
+
+                                                        var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        log.Info("------------------------------------Failed------------------------------------\r\n");
+                                                        log.Info($"{e.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{e.StackTrace}\r\n");
+
+                                                        scripteventargs.Message = e.Message;
+                                                        scripteventargs.Trace = e.StackTrace?.ToString();
+                                                    }
+                                                    catch (System.Exception e)
+                                                    {
+                                                        var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        var innerex = GetInnerException(e);
+                                                        log.Info("------------------------------------Error------------------------------------\r\n");
+                                                        log.Info($"{innerex.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{innerex.StackTrace}\r\n");
+                                                        Console.WriteLine(innerex.Message);
+                                                        testcase.ErrorAdd();
+                                                        executedstatus = false;
+                                                        rd.Status = ScriptStatus.Error;
+                                                        rd.ErrorMessage = innerex.Message;
+
+                                                        scripteventargs.Message = innerex.Message;
+                                                        scripteventargs.Trace = innerex.StackTrace?.ToString();
+
+                                                    }
+
+                                                    scripteventargs.Data = JsonConvert.DeserializeObject<AFWDictionary<string>>(JsonConvert.SerializeObject(list[model.Index].Dict));
+                                                    scripteventargs.Status = rd.Status;
+                                                    scripteventargs.AdditionalInfo = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("CaseId")))
+                                                    {
+                                                        var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("CaseId", caseiddata.Value);
+                                                        }
+                                                    }
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("ReportName")))
+                                                    {
+                                                        var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("ReportName", caseiddata.Value);
+                                                        }
+                                                    }
+
+                                                    rd.Name = script.PropertyValue<string>("ReportName");
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("ScriptId")))
+                                                    {
+                                                        var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "scriptid" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("ScriptId", caseiddata.Value);
+                                                        }
+                                                    }
+                                                    log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                    log.InsertHTML($"<div>{model.Name}</div>\r\n");
+
+                                                    scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
+
+                                                    if (ds != null)
+                                                    {
+                                                        var outobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceOutAttribute>() != null);
+                                                        object senddata = null;
+                                                        if (outobjectfield != null)
+                                                        {
+                                                            senddata = outobjectfield.GetValue(script);
+
+                                                        }
+                                                        try
+                                                        {
+                                                            ds.WriteDataSource(scriptinfo.DisplayName, list[model.Index].Dict, senddata, rd.Status);
+                                                        }
+                                                        catch (System.Exception eDataSource)
+                                                        {
+                                                            Console.WriteLine(eDataSource.Message);
+                                                            Console.WriteLine(eDataSource.StackTrace);
+                                                            log.Info("------------------------------------Additional Data Source Error------------------------------------\r\n");
+                                                            log.Info($"{eDataSource.Message}\r\n");
+                                                            log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                            log.Info($"{eDataSource.StackTrace}\r\n");
+                                                        }
+
+                                                    }
+
+                                                    testcase.CountAdd();
+                                                    rd.Log = log.Stores.Clone();
+                                                    rd.Data = list[model.Index].Dict;
+                                                    rd.Duration = DateTime.Now - startTime;
+
+
+                                                    var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+                                                    sai.SetMember("SetId", model.SetId);
+                                                    rm.GenDetailReport($"{filename}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath, rd, rdindex, script, scripteventargs);
+                                                }
+                                            }
+                                            try
+                                            {
+                                                dp.Update(dt);
+                                            }
+                                            catch (System.Exception ee)
+                                            {
+                                                Console.WriteLine(ee.Message);
+                                            }
+                                            config.OnAfterScripotCompleted(scripteventargs);
+                                        }
+                                        return new Tuple<bool?, int>(executedstatus, (int)d);
+                                    }
+                                    else
+                                    {
+                                        return new Tuple<bool?, int>(null, (int)d);
+                                    }
+                                }, result.Item2);
+                                tasks.Add(task);
                             }
 
+                        }
+                        num = tasks.Count;
+                    }
+                }
+                else
+                {
+                    int rdindex = 0;
+                    foreach (var batch in btemplate.Batch)
+                    {
+                        if (batch.IsDependencyQueue)
+                        {
+                            int maxsupporteddatalen = 0;
+                            if (batch.Groups.Count > 0)
+                            {
+                                string currentfile = batch.Groups[0].File;
+                                string currentsheet = batch.Groups[0].Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+
+                                if (type == null)
+                                {
+                                    Console.WriteLine($"Not Found Script {{{batch.Groups[0].name}}}");
+                                    continue;
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{batch.Groups[0].name}}} Error as more than 1 Constructor.");
+                                    continue;
+                                }
+
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
+
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
+                                ProviderModel dt = dp.ExtractData(batch.Groups[0].name, batch.Groups[0].scriptid);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                maxsupporteddatalen = list.Count;
+
+                                for (int n = 0; n < maxsupporteddatalen; n++)
+                                {
 
 
+                                    foreach (var item in batch.Groups)
+                                    {
+                                        bool isbreak = false;
+
+                                        string currentrunfile = item.File;
+                                        string currentrunsheet = item.Sheet;
+
+                                        int additionaldatasourceCount = 1;
+                                        DataSource ds = null;
+                                        System.Collections.IList additionaldatasource = null;
+
+                                        var runtype = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == item.name);
+                                        if (runtype == null)
+                                        {
+                                            Console.WriteLine($"Not found Scirpt {{{item.name}}}");
+                                            break;
+                                        }
+                                        if (runtype.GetConstructors().Count() > 1)
+                                        {
+                                            Console.WriteLine($"Script {{{item.name}}} Error as more than 1 Constructor.");
+                                            break;
+                                        }
+                                        var runscriptinfo = runtype.GetCustomAttribute<ScriptAttribute>();
+
+                                        if (string.IsNullOrEmpty(currentfile))
+                                        {
+                                            currentrunfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(runscriptinfo.DataFile) ? this.DataFile : runscriptinfo.DataFile : btemplate.File;
+                                        }
+                                        if (string.IsNullOrEmpty(currentsheet))
+                                        {
+                                            currentrunsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(runscriptinfo.SheetName) ? this.SheetName : runscriptinfo.SheetName : btemplate.Sheet;
+                                        }
+                                        DataProvider rundp = new DataProvider(currentrunfile, currentrunsheet);
+
+                                        ProviderModel rundt = rundp.ExtractData(item.name, item.scriptid);
+                                        var runlist = rundt.list.Where(t => t.IsEnabled).ToList();
+                                        if (runlist.Count < n)
+                                        {
+                                            break;
+                                        }
+
+                                        if (runscriptinfo.DataSource != null && runscriptinfo.DataSource.BaseType == typeof(DataSource))
+                                        {
+                                            try
+                                            {
+                                                ds = Activator.CreateInstance(runscriptinfo.DataSource) as DataSource;
+                                                additionaldatasource = ds.ReadDataSource(runscriptinfo.DisplayName, runlist[n].Dict);
+                                                additionaldatasourceCount = additionaldatasource.Count;
+                                            }
+                                            catch (System.Exception edatasource)
+                                            {
+                                                Console.WriteLine(edatasource.Message);
+                                                Console.WriteLine(edatasource.StackTrace);
+                                                additionaldatasourceCount = 0;
+                                            }
+
+                                            if (additionaldatasourceCount == 0)
+                                            {
+                                                Console.WriteLine("Read additional DataSource is 0.");
+                                                break;
+
+                                            }
+                                        }
+
+                                        ReportItem testcase = rm.TestCases.FirstOrDefault(t => t.Name == item.name);
+                                        if (testcase == null)
+                                        {
+                                            testcase = new ReportItem();
+                                            testcase.Name = item.name;
+                                            testcase.Creator = runscriptinfo.Creator;
+                                            testcase.Details = new List<ReportItemDetail>();
+                                            rm.TestCases.Add(testcase);
+                                        }
+
+                                        for (int xx = 0; xx < additionaldatasourceCount; xx++)
+                                        {
+                                            rdindex++;
+
+                                            ReportItemDetail rd = new ReportItemDetail();
+                                            DateTime startTime = DateTime.Now;
+
+                                            testcase.Details.Add(rd);
+                                            string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
+                                            ScriptEventArgs scripteventargs = new ScriptEventArgs();
+                                            scripteventargs.Name = item.name;
+                                            scripteventargs.ScriptId = item.scriptid;
+
+                                            //init log
+
+                                            using (Log.Log log = Log.Log.GetLog($"{item.name}_{currentdate}_{n}", config.LogFolderPath))
+                                            {
+                                                using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
+                                                {
+
+                                                    IScript script = null;
+                                                    try
+                                                    {
+
+                                                        script = Activator.CreateInstance(type) as IScript;
+
+                                                        script.PropertyAssignment("Log", log);
+                                                        if (ds != null)
+                                                        {
+                                                            var inobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceInAttribute>() != null);
+                                                            if (inobjectfield != null)
+                                                            {
+                                                                try
+                                                                {
+                                                                    inobjectfield.SetValue(script, additionaldatasource[xx]);
+                                                                }
+                                                                catch (System.Exception econvert)
+                                                                {
+                                                                    Console.WriteLine(econvert.Message);
+                                                                }
+                                                            }
+                                                        }
+
+
+
+
+                                                        script.Test(runlist[n].Dict);
+                                                        var parameters = runtype.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("EndHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("EndHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+
+                                                        }
+
+                                                        testcase.PassAdd();
+                                                        rd.Status = ScriptStatus.Pass;
+                                                    }
+                                                    catch (Exception.AssertionException e)
+                                                    {
+                                                        Console.WriteLine(e.Message);
+                                                        testcase.FailAdd();
+                                                        rd.Status = ScriptStatus.Fail;
+                                                        rd.ErrorMessage = e.Message;
+
+                                                        isbreak = true;
+
+                                                        var parameters = runtype.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        log.Info("------------------------------------Failed------------------------------------\r\n");
+                                                        log.Info($"{e.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{e.StackTrace}\r\n");
+
+                                                        scripteventargs.Message = e.Message;
+                                                        scripteventargs.Trace = e.StackTrace?.ToString();
+                                                    }
+                                                    catch (System.Exception e)
+                                                    {
+                                                        var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        var innerex = GetInnerException(e);
+                                                        log.Info("------------------------------------Error------------------------------------\r\n");
+                                                        log.Info($"{innerex.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{innerex.StackTrace}\r\n");
+                                                        Console.WriteLine(innerex.Message);
+                                                        testcase.ErrorAdd();
+
+                                                        rd.Status = ScriptStatus.Error;
+                                                        rd.ErrorMessage = innerex.Message;
+
+                                                        scripteventargs.Message = innerex.Message;
+                                                        scripteventargs.Trace = innerex.StackTrace?.ToString();
+                                                        isbreak = true;
+                                                    }
+
+                                                    scripteventargs.Data = JsonConvert.DeserializeObject<AFWDictionary<string>>(JsonConvert.SerializeObject(runlist[n].Dict));
+                                                    scripteventargs.Status = rd.Status;
+                                                    scripteventargs.AdditionalInfo = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("CaseId")))
+                                                    {
+                                                        var caseiddata = runlist[n].Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("CaseId", caseiddata.Value);
+                                                        }
+                                                    }
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("ReportName")))
+                                                    {
+                                                        var caseiddata = runlist[n].Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("ReportName", caseiddata.Value);
+                                                        }
+                                                    }
+
+                                                    rd.Name = script.PropertyValue<string>("ReportName");
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("ScriptId")))
+                                                    {
+                                                        var caseiddata = runlist[n].Dict.FirstOrDefault(t => "scriptid" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("ScriptId", caseiddata.Value);
+                                                        }
+                                                    }
+                                                    log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                    log.InsertHTML($"<div>{item.name}</div>\r\n");
+
+                                                    scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
+
+                                                    if (ds != null)
+                                                    {
+                                                        var outobjectfield = runtype.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceOutAttribute>() != null);
+                                                        object senddata = null;
+                                                        if (outobjectfield != null)
+                                                        {
+                                                            senddata = outobjectfield.GetValue(script);
+
+                                                        }
+                                                        try
+                                                        {
+                                                            ds.WriteDataSource(runscriptinfo.DisplayName, runlist[n].Dict, senddata, rd.Status);
+                                                        }
+                                                        catch (System.Exception eDataSource)
+                                                        {
+                                                            Console.WriteLine(eDataSource.Message);
+                                                            Console.WriteLine(eDataSource.StackTrace);
+                                                            log.Info("------------------------------------Additional Data Source Error------------------------------------\r\n");
+                                                            log.Info($"{eDataSource.Message}\r\n");
+                                                            log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                            log.Info($"{eDataSource.StackTrace}\r\n");
+                                                        }
+
+                                                    }
+
+                                                    testcase.CountAdd();
+                                                    rd.Log = log.Stores.Clone();
+                                                    rd.Data = runlist[n].Dict;
+                                                    rd.Duration = DateTime.Now - startTime;
+
+
+                                                    var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+                                                    sai.SetMember("SetId", batch.SetId);
+                                                    rm.GenDetailReport($"{filename}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath, rd, rdindex, script, scripteventargs);
+                                                    if (isbreak)
+                                                    {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            try
+                                            {
+                                                rundp.Update(dt);
+                                            }
+                                            catch (System.Exception ee)
+                                            {
+                                                Console.WriteLine(ee.Message);
+                                            }
+                                            config.OnAfterScripotCompleted(scripteventargs);
+                                        }
+                                        if (isbreak)
+                                        {
+                                            break;
+                                        }
+
+                                    }
+
+                                }
+                            }
+                            else
+                            {
+                                continue;
+                            }
                         }
                         else
                         {
-                            continue;
-                        }
-
-
-
-
-
-
-                    }
-                    else
-                    {
-
-                        foreach (var item in batch.Groups)
-                        {
-                            string currentfile = item.File;
-                            string currentsheet = item.Sheet;
-
-
-                            var type = names.FirstOrDefault(t => t.Key == item.name.ToLower()).Value;
-
-                            if (type == null)
+                            foreach (var item in batch.Groups)
                             {
-                                Console.WriteLine($"Not Found Script {{{item.name}}}");
-                                continue;
-                            }
-                            var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
-                            if (string.IsNullOrEmpty(currentfile))
-                            {
-                                currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
-                            }
-                            if (string.IsNullOrEmpty(currentsheet))
-                            {
-                                currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
-                            }
-
-                            DataProvider dp = new DataProvider(currentfile, currentsheet);
-                            ProviderModel dt = dp.ExtractData(item.name);
-                            var list = dt.list.Where(t => t.IsEnabled).ToList();
-
-                            ReportItem testcase = rm.TestCases.FirstOrDefault(t => t.Name == item.name);
-                            if (testcase == null)
-                            {
-                                testcase = new ReportItem();
-                                testcase.Name = item.name;
-                                testcase.Details = new List<ReportItemDetail>();
-                                rm.TestCases.Add(testcase);
-                            }
-
-
-
-
-
-
-
-
-                            int index = 0;
-                            foreach (DataModel row in list)
-                            {
-                                index++;
-
-                                ReportItemDetail rd = new ReportItemDetail();
-                                testcase.Details.Add(rd);
-                                string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
-                                //启动日志
-
-                                using (Log.Log log = Log.Log.GetLog($"{item.name}_{currentdate}_{index}", config.LogFolderPath))
+                                string currentfile =item.File;
+                                string currentsheet = item.Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == item.name);
+                                if (type == null)
                                 {
-                                    using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
-                                    {
-                                        Script script = null;
-                                        try
-                                        {
-
-                                            script = Activator.CreateInstance(type) as Script;
-                                            script.Log = log;
-                                            script.Test(row.Dict);
-                                            var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
-                                            foreach (var parameter in parameters)
-                                            {
-                                                var objvalue = parameter.GetValue(script);
-                                                if (objvalue != null)
-                                                {
-                                                    var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
-                                                    var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
-                                                    if (parobj != null)
-                                                    {
-                                                        MethodInfo handlerMethod = returntype.GetProperty("EndHandle").GetValue(parobj).GetType().GetMethod("Invoke");
-                                                        handlerMethod.Invoke(returntype.GetProperty("EndHandle").GetValue(parobj), new object[] { objvalue, log });
-                                                    }
-                                                }
-                                            }
-
-                                            testcase.Pass += 1;
-                                            rd.Status = "Pass";
-
-                                            if (string.IsNullOrEmpty(script.Country))
-                                            {
-                                                var countrydata = row.Dict.FirstOrDefault(t => "country" == t.Key.ToLower());
-                                                if (!string.IsNullOrEmpty(countrydata.Value))
-                                                {
-                                                    rd.Country = countrydata.Value;
-                                                }
-                                            }
-                                            else
-                                            {
-                                                rd.Country = script.Country;
-
-                                            }
-
-                                            if (string.IsNullOrEmpty(script.CaseId))
-                                            {
-                                                var caseiddata = row.Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
-                                                if (!string.IsNullOrEmpty(caseiddata.Value))
-                                                {
-                                                    rd.CaseId = caseiddata.Value;
-                                                }
-                                            }
-                                            else
-                                            {
-                                                rd.CaseId = script.CaseId;
-
-                                            }
-                                            if (string.IsNullOrEmpty(script.ReportName))
-                                            {
-                                                var reportnamedata = row.Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
-                                                if (!string.IsNullOrEmpty(reportnamedata.Value))
-                                                {
-                                                    rd.Name = reportnamedata.Value;
-                                                }
-
-
-                                            }
-                                            else
-                                            {
-                                                rd.Name = script.ReportName;
-
-                                            }
-                                        }
-                                        catch (Exception.AssertionException e)
-                                        {
-                                            Console.WriteLine(e.Message);
-                                            testcase.Fail += 1;
-                                            rd.Status = "Fail";
-                                            rd.ErrorMessage = e.Message;
-                                            if (string.IsNullOrEmpty(script.Country))
-                                            {
-                                                var countrydata = row.Dict.FirstOrDefault(t => "country" == t.Key.ToLower());
-                                                if (!string.IsNullOrEmpty(countrydata.Value))
-                                                {
-                                                    rd.Country = countrydata.Value;
-                                                }
-                                            }
-                                            else
-                                            {
-                                                rd.Country = script.Country;
-
-                                            }
-
-                                            if (string.IsNullOrEmpty(script.CaseId))
-                                            {
-                                                var caseiddata = row.Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
-                                                if (!string.IsNullOrEmpty(caseiddata.Value))
-                                                {
-                                                    rd.CaseId = caseiddata.Value;
-                                                }
-                                            }
-                                            else
-                                            {
-                                                rd.CaseId = script.CaseId;
-
-                                            }
-                                            if (string.IsNullOrEmpty(script.ReportName))
-                                            {
-                                                var reportnamedata = row.Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
-                                                if (!string.IsNullOrEmpty(reportnamedata.Value))
-                                                {
-                                                    rd.Name = reportnamedata.Value;
-                                                }
-
-
-                                            }
-                                            else
-                                            {
-                                                rd.Name = script.ReportName;
-
-                                            }
-
-                                            var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
-                                            foreach (var parameter in parameters)
-                                            {
-                                                var objvalue = parameter.GetValue(script);
-                                                if (objvalue != null)
-                                                {
-                                                    var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
-                                                    var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
-                                                    if (parobj != null)
-                                                    {
-                                                        MethodInfo handlerMethod = returntype.GetProperty("EndHandle").GetValue(parobj).GetType().GetMethod("Invoke");
-                                                        handlerMethod.Invoke(returntype.GetProperty("EndHandle").GetValue(parobj), new object[] { objvalue, log });
-                                                    }
-                                                }
-                                            }
-                                            log.Info("-------------------------Failed------------------------\r\n");
-                                            log.Info($"{e.Message}\r\n");
-                                            log.Info("-------------------------Tracking---------------------\r\n");
-                                            log.Info($"{e.StackTrace}\r\n");
-                                        }
-                                        catch (System.Exception e)
-                                        {
-                                            var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
-                                            foreach (var parameter in parameters)
-                                            {
-                                                var objvalue = parameter.GetValue(script);
-                                                if (objvalue != null)
-                                                {
-                                                    var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
-                                                    var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
-                                                    if (parobj != null)
-                                                    {
-                                                        MethodInfo handlerMethod = returntype.GetProperty("EndHandle").GetValue(parobj).GetType().GetMethod("Invoke");
-                                                        handlerMethod.Invoke(returntype.GetProperty("EndHandle").GetValue(parobj), new object[] { objvalue, log });
-                                                    }
-                                                }
-                                            }
-                                            var innerex = GetInnerException(e);
-                                            log.Info("-------------------------Error------------------------\r\n");
-                                            log.Info($"{innerex.Message}\r\n");
-                                            log.Info("-------------------------Tracking---------------------\r\n");
-                                            log.Info($"{innerex.StackTrace}\r\n");
-                                            Console.WriteLine(innerex.Message);
-                                            testcase.Error += 1;
-                                            rd.Status = "Error";
-                                            rd.ErrorMessage = e.Message;
-                                            if (string.IsNullOrEmpty(script.Country))
-                                            {
-                                                var countrydata = row.Dict.FirstOrDefault(t => "country" == t.Key.ToLower());
-                                                if (!string.IsNullOrEmpty(countrydata.Value))
-                                                {
-                                                    rd.Country = countrydata.Value;
-                                                }
-                                            }
-                                            else
-                                            {
-                                                rd.Country = script.Country;
-
-                                            }
-
-                                            if (string.IsNullOrEmpty(script.CaseId))
-                                            {
-                                                var caseiddata = row.Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
-                                                if (!string.IsNullOrEmpty(caseiddata.Value))
-                                                {
-                                                    rd.CaseId = caseiddata.Value;
-                                                }
-                                            }
-                                            else
-                                            {
-                                                rd.CaseId = script.CaseId;
-
-                                            }
-                                            if (string.IsNullOrEmpty(script.ReportName))
-                                            {
-                                                var reportnamedata = row.Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
-                                                if (!string.IsNullOrEmpty(reportnamedata.Value))
-                                                {
-                                                    rd.Name = reportnamedata.Value;
-                                                }
-
-
-                                            }
-                                            else
-                                            {
-                                                rd.Name = script.ReportName;
-
-                                            }
-
-                                        }
-                                        testcase.Count += 1;
-                                        rd.Log = log.Stores.Clone();
-                                        rd.Data = row.Dict;
-                                    }
+                                    Console.WriteLine($"Not Found Script {{{item.name}}}");
+                                    continue;
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{item.name}}} Error as more than 1 Constructor.");
+                                    continue;
                                 }
 
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
 
-                            }
-                            try
-                            {
-                                dp.Update(dt);
-                            }
-                            catch (System.Exception ee)
-                            {
-                                Console.WriteLine(ee.Message);
-                            }
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
+                                ProviderModel dt = dp.ExtractData(item.name,item.scriptid);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+
+                                ReportItem testcase = rm.TestCases.FirstOrDefault(t => t.Name == item.name);
+
+                                if (testcase == null)
+                                {
+                                    testcase = new ReportItem();
+                                    testcase.Name =item.name;
+                                    testcase.Creator = scriptinfo.Creator;
+                                    testcase.Details = new List<ReportItemDetail>();
+                                    rm.TestCases.Add(testcase);
+                                }
+
+                                int index = 0;
+                                foreach(DataModel row in list)
+                                {
+                                    int additionaldatasourceCount = 1;
+                                    DataSource ds = null;
+                                    System.Collections.IList additionaldatasource = null;
+
+                               
+                                    if (scriptinfo.DataSource != null && scriptinfo.DataSource.BaseType == typeof(DataSource))
+                                    {
+                                        try
+                                        {
+                                            ds = Activator.CreateInstance(scriptinfo.DataSource) as DataSource;
+                                            additionaldatasource = ds.ReadDataSource(scriptinfo.DisplayName, row.Dict);
+                                            additionaldatasourceCount = additionaldatasource.Count;
+                                        }
+                                        catch (System.Exception edatasource)
+                                        {
+                                            Console.WriteLine(edatasource.Message);
+                                            Console.WriteLine(edatasource.StackTrace);
+                                            additionaldatasourceCount = 0;
+                                        }
+
+                                        if (additionaldatasourceCount == 0)
+                                        {
+                                            Console.WriteLine("Read additional DataSource is 0.");
+                                            continue;
+
+                                        }
+                                    }
+                                    for (int xx = 0; xx < additionaldatasourceCount; xx++)
+                                    {
+                                        rdindex++;
+                                        index++;
+                                     
+
+                                        ReportItemDetail rd = new ReportItemDetail();
+                                        DateTime startTime = DateTime.Now;
+
+                                        testcase.Details.Add(rd);
+                                        string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
+                                        ScriptEventArgs scripteventargs = new ScriptEventArgs();
+                                        scripteventargs.Name = item.name;
+                                        scripteventargs.ScriptId = item.scriptid;
+
+                                        //init log
+
+                                        using (Log.Log log = Log.Log.GetLog($"{item.name}_{currentdate}_{index}", config.LogFolderPath))
+                                        {
+                                            using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
+                                            {
+
+                                                IScript script = null;
+                                                try
+                                                {
+
+                                                    script = Activator.CreateInstance(type) as IScript;
+
+                                                    script.PropertyAssignment("Log", log);
+                                                    if (ds != null)
+                                                    {
+                                                        var inobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceInAttribute>() != null);
+                                                        if (inobjectfield != null)
+                                                        {
+                                                            try
+                                                            {
+                                                                inobjectfield.SetValue(script, additionaldatasource[xx]);
+                                                            }
+                                                            catch (System.Exception econvert)
+                                                            {
+                                                                Console.WriteLine(econvert.Message);
+                                                            }
+                                                        }
+                                                    }
 
 
+
+
+                                                    script.Test(row.Dict);
+                                                    var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+                                                    foreach (var parameter in parameters)
+                                                    {
+                                                        var objvalue = parameter.GetValue(script);
+                                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                        if (parobj != null)
+                                                        {
+                                                            var handler = returntype.GetProperty("EndHandle").GetValue(parobj);
+
+                                                            if (handler != null)
+                                                            {
+                                                                MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                            else
+                                                            {
+                                                                var handlerasync = returntype.GetProperty("EndHandleAsync").GetValue(parobj);
+                                                                if (handlerasync != null)
+                                                                {
+                                                                    MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                        task.Wait();
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                    }
+
+                                                    testcase.PassAdd();
+                                                    rd.Status = ScriptStatus.Pass;
+                                                }
+                                                catch (Exception.AssertionException e)
+                                                {
+                                                    Console.WriteLine(e.Message);
+                                                    testcase.FailAdd();
+                                                    rd.Status = ScriptStatus.Fail;
+                                                    rd.ErrorMessage = e.Message;
+
+                                                    var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                    foreach (var parameter in parameters)
+                                                    {
+                                                        var objvalue = parameter.GetValue(script);
+                                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                        if (parobj != null)
+                                                        {
+                                                            var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                            if (handler != null)
+                                                            {
+                                                                MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                            else
+                                                            {
+                                                                var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                if (handlerasync != null)
+                                                                {
+                                                                    MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                        task.Wait();
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    log.Info("------------------------------------Failed------------------------------------\r\n");
+                                                    log.Info($"{e.Message}\r\n");
+                                                    log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                    log.Info($"{e.StackTrace}\r\n");
+
+                                                    scripteventargs.Message = e.Message;
+                                                    scripteventargs.Trace = e.StackTrace?.ToString();
+                                                }
+                                                catch (System.Exception e)
+                                                {
+                                                    var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                    foreach (var parameter in parameters)
+                                                    {
+                                                        var objvalue = parameter.GetValue(script);
+                                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                        if (parobj != null)
+                                                        {
+                                                            var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                            if (handler != null)
+                                                            {
+                                                                MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                            else
+                                                            {
+                                                                var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                if (handlerasync != null)
+                                                                {
+                                                                    MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                        task.Wait();
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    var innerex = GetInnerException(e);
+                                                    log.Info("------------------------------------Error------------------------------------\r\n");
+                                                    log.Info($"{innerex.Message}\r\n");
+                                                    log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                    log.Info($"{innerex.StackTrace}\r\n");
+                                                    Console.WriteLine(innerex.Message);
+                                                    testcase.ErrorAdd();
+                                                    rd.Status = ScriptStatus.Error;
+                                                    rd.ErrorMessage = innerex.Message;
+
+                                                    scripteventargs.Message = innerex.Message;
+                                                    scripteventargs.Trace = innerex.StackTrace?.ToString();
+
+                                                }
+
+                                                scripteventargs.Data = JsonConvert.DeserializeObject<AFWDictionary<string>>(JsonConvert.SerializeObject(row.Dict));
+                                                scripteventargs.Status = rd.Status;
+                                                scripteventargs.AdditionalInfo = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+
+                                                if (string.IsNullOrEmpty(script.PropertyValue<string>("CaseId")))
+                                                {
+                                                    var caseiddata =row.Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
+                                                    if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                    {
+                                                        script.PropertyAssignment("CaseId", caseiddata.Value);
+                                                    }
+                                                }
+
+                                                if (string.IsNullOrEmpty(script.PropertyValue<string>("ReportName")))
+                                                {
+                                                    var caseiddata =row.Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
+                                                    if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                    {
+                                                        script.PropertyAssignment("ReportName", caseiddata.Value);
+                                                    }
+                                                }
+
+                                                rd.Name = script.PropertyValue<string>("ReportName");
+
+                                                if (string.IsNullOrEmpty(script.PropertyValue<string>("ScriptId")))
+                                                {
+                                                    var caseiddata = row.Dict.FirstOrDefault(t => "scriptid" == t.Key.ToLower());
+                                                    if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                    {
+                                                        script.PropertyAssignment("ScriptId", caseiddata.Value);
+                                                    }
+                                                }
+                                                log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                log.InsertHTML($"<div>{item.name}</div>\r\n");
+
+                                                scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
+
+                                                if (ds != null)
+                                                {
+                                                    var outobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceOutAttribute>() != null);
+                                                    object senddata = null;
+                                                    if (outobjectfield != null)
+                                                    {
+                                                        senddata = outobjectfield.GetValue(script);
+
+                                                    }
+                                                    try
+                                                    {
+                                                        ds.WriteDataSource(scriptinfo.DisplayName, row.Dict, senddata, rd.Status);
+                                                    }
+                                                    catch (System.Exception eDataSource)
+                                                    {
+                                                        Console.WriteLine(eDataSource.Message);
+                                                        Console.WriteLine(eDataSource.StackTrace);
+                                                        log.Info("------------------------------------Additional Data Source Error------------------------------------\r\n");
+                                                        log.Info($"{eDataSource.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{eDataSource.StackTrace}\r\n");
+                                                    }
+
+                                                }
+
+                                                testcase.CountAdd();
+                                                rd.Log = log.Stores.Clone();
+                                                rd.Data =row.Dict;
+                                                rd.Duration = DateTime.Now - startTime;
+
+
+                                                var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+                                                sai.SetMember("SetId", batch.SetId);
+                                                rm.GenDetailReport($"{filename}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath, rd, rdindex, script, scripteventargs);
+                                            }
+                                        }
+                                        config.OnAfterScripotCompleted(scripteventargs);
+                                       
+                                    }
+
+                                }
+                                try
+                                {
+                                    dp.Update(dt);
+                                }
+                                catch (System.Exception ee)
+                                {
+                                    Console.WriteLine(ee.Message);
+                                }
+                            }
                         }
-
-
+                      
                     }
 
                 }
+
                 rm.Duration = (DateTime.Now - rm.StartTime).Duration();
-                rm.GenReport($"{filename}_{DateTime.Now.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath);
-                Console.WriteLine("Script completed execution.");
+                rm.GenReport($"{filename}_{curr.ToString("MMddyyyyHHmmss")}.html",config.LogFolderPath);
+                Console.WriteLine("script completed execution.");
+                return false;
+
 
             }
             else
@@ -765,32 +1927,27 @@ namespace ApiFrameWork.Command
 
                 if ('\"' == args.FirstOrDefault())
                 {
-                    Regex regdata = new Regex($"^\\\"[\\S ]+\\\"", RegexOptions.IgnoreCase);
+                    Regex regdata = new Regex("(?<=^\\\")[\\S ]+(?=\\\"$)", RegexOptions.IgnoreCase);
                     data = regdata.Match(args).Value;
                 }
                 else
                 {
-                    Regex regdata = new Regex($"^[\\S]+($|(?= ))", RegexOptions.IgnoreCase);
+                    Regex regdata = new Regex("^[\\S]+($|(?= ))", RegexOptions.IgnoreCase);
                     data = regdata.Match(args).Value;
                 }
 
-
-
-
-                Dictionary<string, Type> names = new Dictionary<string, Type>();
-                foreach (var item in List)
-                {
-                    var attribute = item.GetCustomAttribute<ScriptAttribute>();
-                    string name = attribute == null ? item.Name.ToLower() : attribute.DisplayName.ToLower();
-                    names.Add(name, item);
-                }
-
-                var type = names.FirstOrDefault(t => t.Key == data.ToLower()).Value;
-
+                var type =  List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == data);
                 if (type == null)
                 {
-                    throw new Exception.CommandPaseException($"Not Found Script {{{data}}}");
+                    throw new Exception.CommandPaseException($"Notr Found Script {{{data}}}");
+                 
                 }
+                if (type.GetConstructors().Count() > 1)
+                {
+                    throw new Exception.CommandPaseException($"Script {{{data}}} Error as more than 1 Constructor.");
+                  
+                }
+
                 var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
                 if (string.IsNullOrEmpty(file))
                 {
@@ -800,13 +1957,15 @@ namespace ApiFrameWork.Command
                 {
                     sheet = string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName;
                 }
+
+
                 if (!string.IsNullOrWhiteSpace(this.schedule))
                 {
                     DateTime currentdt = DateTime.Now;
                     DateTime mdt = DateTime.ParseExact($"{currentdt.ToString("yyyyMMdd")}{this.schedule}", "yyyyMMddHHmm", System.Globalization.CultureInfo.InvariantCulture);
                     if (mdt < currentdt)
                     {
-                        mdt.AddDays(1);
+                       mdt.AddDays(1);
                     }
                     int sec = (int)mdt.Subtract(currentdt).TotalSeconds;
                     if (sec > 0)
@@ -814,256 +1973,350 @@ namespace ApiFrameWork.Command
                         Console.WriteLine($"Program will sleep until <{mdt.ToString("HH:mm")}>");
                         System.Threading.Thread.Sleep(sec * 1000);
                     }
+
                 }
 
+                DateTime curr = DateTime.Now;
+
                 DataProvider dp = new DataProvider(file, sheet);
-                ProviderModel dt = dp.ExtractData(data);
+                ProviderModel dt = dp.ExtractData(data, this.scriptid);
                 var list = dt.list.Where(t => t.IsEnabled).ToList();
-                ReportModel rm = new ReportModel();
-                rm.StartTime = DateTime.Now;
+
+                ReportModel rm = new ReportModel(Upload, false);
+                rm.StartTime=DateTime.Now;
                 rm.TestCases = new List<ReportItem>();
                 ReportItem testcase = new ReportItem();
                 testcase.Name = data;
-                testcase.Count = list.Count;
+                testcase.Creator=scriptinfo.Creator;
                 testcase.Details = new List<ReportItemDetail>();
                 rm.TestCases.Add(testcase);
                 LaunchConfig config = LaunchConfig.GetInstance();
 
-
+                int rdindex = 0;
                 int index = 0;
+
                 foreach (DataModel row in list)
                 {
-                    index++;
-                    // System.Threading.Thread.Sleep(1000);
-                    ReportItemDetail rd = new ReportItemDetail();
-                    testcase.Details.Add(rd);
-                    string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
-                    //启动日志
+                    int additionaldatasourceCount = 1;
+                    DataSource ds = null;
+                    System.Collections.IList additionaldatasource = null;
 
-                    using (Log.Log log = Log.Log.GetLog($"{data}_{currentdate}_{index}", config.LogFolderPath))
+
+                    if (scriptinfo.DataSource != null && scriptinfo.DataSource.BaseType == typeof(DataSource))
                     {
-                        using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
+                        try
                         {
-                            Script script = null;
-                            try
-                            {
+                            ds = Activator.CreateInstance(scriptinfo.DataSource) as DataSource;
+                            additionaldatasource = ds.ReadDataSource(scriptinfo.DisplayName, row.Dict);
+                            additionaldatasourceCount = additionaldatasource.Count;
+                        }
+                        catch (System.Exception edatasource)
+                        {
+                            Console.WriteLine(edatasource.Message);
+                            Console.WriteLine(edatasource.StackTrace);
+                            additionaldatasourceCount = 0;
+                        }
 
-                                script = Activator.CreateInstance(type) as Script;
+                        if (additionaldatasourceCount == 0)
+                        {
+                            Console.WriteLine("Read additional DataSource is 0.");
+                            continue;
 
-                                script.Log = log;
-                                script.Test(row.Dict);
-
-                                var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
-                                foreach (var parameter in parameters)
-                                {
-                                    var objvalue = parameter.GetValue(script);
-                                    if (objvalue != null)
-                                    {
-                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
-                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
-                                        if (parobj != null)
-                                        {
-                                            MethodInfo handlerMethod = returntype.GetProperty("EndHandle").GetValue(parobj).GetType().GetMethod("Invoke");
-                                            handlerMethod.Invoke(returntype.GetProperty("EndHandle").GetValue(parobj), new object[] { objvalue, log });
-                                        }
-                                    }
-                                }
-
-
-                                testcase.Pass += 1;
-                                rd.Status = "Pass";
-                                if (string.IsNullOrEmpty(script.Country))
-                                {
-                                    var countrydata = row.Dict.FirstOrDefault(t => "country" == t.Key.ToLower());
-                                    if (!string.IsNullOrEmpty(countrydata.Value))
-                                    {
-                                        rd.Country = countrydata.Value;
-                                    }
-                                }
-                                else
-                                {
-                                    rd.Country = script.Country;
-
-                                }
-
-                                if (string.IsNullOrEmpty(script.CaseId))
-                                {
-                                    var caseiddata = row.Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
-                                    if (!string.IsNullOrEmpty(caseiddata.Value))
-                                    {
-                                        rd.CaseId = caseiddata.Value;
-                                    }
-                                }
-                                else
-                                {
-                                    rd.CaseId = script.CaseId;
-
-                                }
-                                if (string.IsNullOrEmpty(script.ReportName))
-                                {
-                                    var reportnamedata = row.Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
-                                    if (!string.IsNullOrEmpty(reportnamedata.Value))
-                                    {
-                                        rd.Name = reportnamedata.Value;
-                                    }
-
-
-                                }
-                                else
-                                {
-                                    rd.Name = script.ReportName;
-
-                                }
-                            }
-                            catch (Exception.AssertionException e)
-                            {
-                                Console.WriteLine(e.Message);
-                                testcase.Fail += 1;
-                                rd.Status = "Fail";
-                                rd.ErrorMessage = e.Message;
-                                if (string.IsNullOrEmpty(script.Country))
-                                {
-                                    var countrydata = row.Dict.FirstOrDefault(t => "country" == t.Key.ToLower());
-                                    if (!string.IsNullOrEmpty(countrydata.Value))
-                                    {
-                                        rd.Country = countrydata.Value;
-                                    }
-                                }
-                                else
-                                {
-                                    rd.Country = script.Country;
-
-                                }
-
-                                if (string.IsNullOrEmpty(script.CaseId))
-                                {
-                                    var caseiddata = row.Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
-                                    if (!string.IsNullOrEmpty(caseiddata.Value))
-                                    {
-                                        rd.CaseId = caseiddata.Value;
-                                    }
-                                }
-                                else
-                                {
-                                    rd.CaseId = script.CaseId;
-
-                                }
-                                if (string.IsNullOrEmpty(script.ReportName))
-                                {
-                                    var reportnamedata = row.Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
-                                    if (!string.IsNullOrEmpty(reportnamedata.Value))
-                                    {
-                                        rd.Name = reportnamedata.Value;
-                                    }
-
-
-                                }
-                                else
-                                {
-                                    rd.Name = script.ReportName;
-
-                                }
-
-                                var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
-                                foreach (var parameter in parameters)
-                                {
-                                    var objvalue = parameter.GetValue(script);
-                                    if (objvalue != null)
-                                    {
-                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
-                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
-                                        if (parobj != null)
-                                        {
-                                            MethodInfo handlerMethod = returntype.GetProperty("ExceptionHandle").GetValue(parobj).GetType().GetMethod("Invoke");
-                                            handlerMethod.Invoke(returntype.GetProperty("ExceptionHandle").GetValue(parobj), new object[] { objvalue, log });
-                                        }
-                                    }
-                                }
-
-                                log.Info("-------------------------Failed------------------------\r\n");
-                                log.Info($"{e.Message}\r\n");
-                                log.Info("-------------------------Tracking---------------------\r\n");
-                                log.Info($"{e.StackTrace}\r\n");
-
-
-
-                            }
-                            catch (System.Exception e)
-                            {
-                                var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
-                                foreach (var parameter in parameters)
-                                {
-                                    var objvalue = parameter.GetValue(script);
-                                    if (objvalue != null)
-                                    {
-                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
-                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
-                                        if (parobj != null)
-                                        {
-                                            MethodInfo handlerMethod = returntype.GetProperty("ExceptionHandle").GetValue(parobj).GetType().GetMethod("Invoke");
-                                            handlerMethod.Invoke(returntype.GetProperty("ExceptionHandle").GetValue(parobj), new object[] { objvalue, log });
-                                        }
-                                    }
-                                }
-
-                                var innerex = GetInnerException(e);
-                                log.Info("-------------------------Error------------------------\r\n");
-                                log.Info($"{innerex.Message}\r\n");
-                                log.Info("-------------------------Tracking---------------------\r\n");
-                                log.Info($"{innerex.StackTrace}\r\n");
-                                Console.WriteLine(innerex.Message);
-                                testcase.Error += 1;
-                                rd.Status = "Error";
-                                rd.ErrorMessage = e.Message;
-
-                                if (string.IsNullOrEmpty(script.Country))
-                                {
-                                    var countrydata = row.Dict.FirstOrDefault(t => "country" == t.Key.ToLower());
-                                    if (!string.IsNullOrEmpty(countrydata.Value))
-                                    {
-                                        rd.Country = countrydata.Value;
-                                    }
-                                }
-                                else
-                                {
-                                    rd.Country = script.Country;
-
-                                }
-
-                                if (string.IsNullOrEmpty(script.CaseId))
-                                {
-                                    var caseiddata = row.Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
-                                    if (!string.IsNullOrEmpty(caseiddata.Value))
-                                    {
-                                        rd.CaseId = caseiddata.Value;
-                                    }
-                                }
-                                else
-                                {
-                                    rd.CaseId = script.CaseId;
-
-                                }
-                                if (string.IsNullOrEmpty(script.ReportName))
-                                {
-                                    var reportnamedata = row.Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
-                                    if (!string.IsNullOrEmpty(reportnamedata.Value))
-                                    {
-                                        rd.Name = reportnamedata.Value;
-                                    }
-
-
-                                }
-                                else
-                                {
-                                    rd.Name = script.ReportName;
-
-                                }
-                            }
-                            rd.Log = log.Stores.Clone();
-                            rd.Data = row.Dict;
                         }
                     }
+                    for (int xx = 0; xx < additionaldatasourceCount; xx++)
+                    {
+                        rdindex++;
+                        index++;
 
+
+                        ReportItemDetail rd = new ReportItemDetail();
+                        DateTime startTime = DateTime.Now;
+
+                        testcase.Details.Add(rd);
+                        string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
+                        ScriptEventArgs scripteventargs = new ScriptEventArgs();
+                        scripteventargs.Name = data;
+                        scripteventargs.ScriptId = this.scriptid;
+
+                        //init log
+
+                        using (Log.Log log = Log.Log.GetLog($"{data}_{currentdate}_{index}", config.LogFolderPath))
+                        {
+                            using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
+                            {
+
+                                IScript script = null;
+                                try
+                                {
+
+                                    script = Activator.CreateInstance(type) as IScript;
+
+                                    script.PropertyAssignment("Log", log);
+                                    if (ds != null)
+                                    {
+                                        var inobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceInAttribute>() != null);
+                                        if (inobjectfield != null)
+                                        {
+                                            try
+                                            {
+                                                inobjectfield.SetValue(script, additionaldatasource[xx]);
+                                            }
+                                            catch (System.Exception econvert)
+                                            {
+                                                Console.WriteLine(econvert.Message);
+                                            }
+                                        }
+                                    }
+
+
+
+
+                                    script.Test(row.Dict);
+                                    var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+                                    foreach (var parameter in parameters)
+                                    {
+                                        var objvalue = parameter.GetValue(script);
+                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                        if (parobj != null)
+                                        {
+                                            var handler = returntype.GetProperty("EndHandle").GetValue(parobj);
+
+                                            if (handler != null)
+                                            {
+                                                MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                try
+                                                {
+                                                    handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                }
+                                                catch (System.Exception eh)
+                                                {
+                                                    var ehinner = GetInnerException(eh);
+                                                    Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                }
+                                            }
+                                            else
+                                            {
+                                                var handlerasync = returntype.GetProperty("EndHandleAsync").GetValue(parobj);
+                                                if (handlerasync != null)
+                                                {
+                                                    MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                    try
+                                                    {
+                                                        var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                        task.Wait();
+                                                    }
+                                                    catch (System.Exception eh)
+                                                    {
+                                                        var ehinner = GetInnerException(eh);
+                                                        Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                    }
+
+                                    testcase.PassAdd();
+                                    rd.Status = ScriptStatus.Pass;
+                                }
+                                catch (Exception.AssertionException e)
+                                {
+                                    Console.WriteLine(e.Message);
+                                    testcase.FailAdd();
+                                    rd.Status = ScriptStatus.Fail;
+                                    rd.ErrorMessage = e.Message;
+
+                                    var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                    foreach (var parameter in parameters)
+                                    {
+                                        var objvalue = parameter.GetValue(script);
+                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                        if (parobj != null)
+                                        {
+                                            var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                            if (handler != null)
+                                            {
+                                                MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                try
+                                                {
+                                                    handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                }
+                                                catch (System.Exception eh)
+                                                {
+                                                    var ehinner = GetInnerException(eh);
+                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                }
+                                            }
+                                            else
+                                            {
+                                                var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                if (handlerasync != null)
+                                                {
+                                                    MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                    try
+                                                    {
+                                                        var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                        task.Wait();
+                                                    }
+                                                    catch (System.Exception eh)
+                                                    {
+                                                        var ehinner = GetInnerException(eh);
+                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    log.Info("------------------------------------Failed------------------------------------\r\n");
+                                    log.Info($"{e.Message}\r\n");
+                                    log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                    log.Info($"{e.StackTrace}\r\n");
+
+                                    scripteventargs.Message = e.Message;
+                                    scripteventargs.Trace = e.StackTrace?.ToString();
+                                }
+                                catch (System.Exception e)
+                                {
+                                    var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                    foreach (var parameter in parameters)
+                                    {
+                                        var objvalue = parameter.GetValue(script);
+                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                        if (parobj != null)
+                                        {
+                                            var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                            if (handler != null)
+                                            {
+                                                MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                try
+                                                {
+                                                    handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                }
+                                                catch (System.Exception eh)
+                                                {
+                                                    var ehinner = GetInnerException(eh);
+                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                }
+                                            }
+                                            else
+                                            {
+                                                var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                if (handlerasync != null)
+                                                {
+                                                    MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                    try
+                                                    {
+                                                        var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                        task.Wait();
+                                                    }
+                                                    catch (System.Exception eh)
+                                                    {
+                                                        var ehinner = GetInnerException(eh);
+                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    var innerex = GetInnerException(e);
+                                    log.Info("------------------------------------Error------------------------------------\r\n");
+                                    log.Info($"{innerex.Message}\r\n");
+                                    log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                    log.Info($"{innerex.StackTrace}\r\n");
+                                    Console.WriteLine(innerex.Message);
+                                    testcase.ErrorAdd();
+                                    rd.Status = ScriptStatus.Error;
+                                    rd.ErrorMessage = innerex.Message;
+
+                                    scripteventargs.Message = innerex.Message;
+                                    scripteventargs.Trace = innerex.StackTrace?.ToString();
+
+                                }
+
+                                scripteventargs.Data = JsonConvert.DeserializeObject<AFWDictionary<string>>(JsonConvert.SerializeObject(row.Dict));
+                                scripteventargs.Status = rd.Status;
+                                scripteventargs.AdditionalInfo = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+
+                                if (string.IsNullOrEmpty(script.PropertyValue<string>("CaseId")))
+                                {
+                                    var caseiddata = row.Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
+                                    if (!string.IsNullOrEmpty(caseiddata.Value))
+                                    {
+                                        script.PropertyAssignment("CaseId", caseiddata.Value);
+                                    }
+                                }
+
+                                if (string.IsNullOrEmpty(script.PropertyValue<string>("ReportName")))
+                                {
+                                    var caseiddata = row.Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
+                                    if (!string.IsNullOrEmpty(caseiddata.Value))
+                                    {
+                                        script.PropertyAssignment("ReportName", caseiddata.Value);
+                                    }
+                                }
+
+                                rd.Name = script.PropertyValue<string>("ReportName");
+
+                                if (string.IsNullOrEmpty(script.PropertyValue<string>("ScriptId")))
+                                {
+                                    var caseiddata = row.Dict.FirstOrDefault(t => "scriptid" == t.Key.ToLower());
+                                    if (!string.IsNullOrEmpty(caseiddata.Value))
+                                    {
+                                        script.PropertyAssignment("ScriptId", caseiddata.Value);
+                                    }
+                                }
+                                log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                log.InsertHTML($"<div>{data}</div>\r\n");
+
+                                scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
+
+                                if (ds != null)
+                                {
+                                    var outobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceOutAttribute>() != null);
+                                    object senddata = null;
+                                    if (outobjectfield != null)
+                                    {
+                                        senddata = outobjectfield.GetValue(script);
+
+                                    }
+                                    try
+                                    {
+                                        ds.WriteDataSource(scriptinfo.DisplayName, row.Dict, senddata, rd.Status);
+                                    }
+                                    catch (System.Exception eDataSource)
+                                    {
+                                        Console.WriteLine(eDataSource.Message);
+                                        Console.WriteLine(eDataSource.StackTrace);
+                                        log.Info("------------------------------------Additional Data Source Error------------------------------------\r\n");
+                                        log.Info($"{eDataSource.Message}\r\n");
+                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                        log.Info($"{eDataSource.StackTrace}\r\n");
+                                    }
+
+                                }
+
+                                testcase.CountAdd();
+                                rd.Log = log.Stores.Clone();
+                                rd.Data = row.Dict;
+                                rd.Duration = DateTime.Now - startTime;
+
+
+                                var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+                                sai.SetMember("BatchMode", "N");
+                                rm.GenDetailReport($"{data}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath, rd, rdindex, script, scripteventargs);
+                            }
+                        }
+                        config.OnAfterScripotCompleted(scripteventargs);
+
+                    }
 
                 }
                 try
@@ -1076,8 +2329,9 @@ namespace ApiFrameWork.Command
                 }
 
                 rm.Duration = (DateTime.Now - rm.StartTime).Duration();
-                rm.GenReport($"{data}_{DateTime.Now.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath);
-                Console.WriteLine("Script completed execution.");
+                rm.GenReport($"{data}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath);
+                Console.WriteLine("script completed execution.");
+                return false;
 
             }
 
@@ -1091,12 +2345,1823 @@ namespace ApiFrameWork.Command
 
         }
 
-        private System.Exception GetInnerException(System.Exception ex)
+        public void Run (object input)
         {
-            if (ex.InnerException == null)
-                return ex;
-            else
-                return GetInnerException(ex.InnerException);
+            BatchTemplate btemplate = input as BatchTemplate;
+            if(btemplate == null)
+            {
+                throw new Exception.CommandPaseException("Missing or Invalid Param");
+            }
+
+            Console.WriteLine("validate batch file setup...");
+
+                foreach (var batchitem in btemplate.Batch)
+                {
+                    foreach (var groupitem in batchitem.Groups)
+                    {
+                        Console.WriteLine($"Script:{groupitem.name}");
+                        string currentfile = groupitem.File;
+                        string currentsheet = groupitem.Sheet;
+                        var scriptinfo = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == groupitem.name)?.GetCustomAttribute<Schema.ScriptAttribute>();
+                        if (scriptinfo == null)
+                        {
+                            Console.WriteLine("script is not found, please double check.");
+                            throw new System.Exception($"script {{{groupitem.name}}} is not found.");
+                        }
+                        Console.WriteLine("script is found.");
+
+                        if (string.IsNullOrEmpty(currentfile))
+                        {
+                            currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+
+                        }
+                        if (string.IsNullOrEmpty(currentsheet))
+                        {
+                            currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                        }
+                    }
+                }
+
+
+                // add schedule runing 
+                if (!string.IsNullOrWhiteSpace(btemplate.Schedule))
+                {
+                    DateTime currentdt = DateTime.Now;
+                    DateTime dt = DateTime.ParseExact($"{currentdt.ToString("yyyyMMdd")}{btemplate.Schedule}", "yyyyMMddHHmm", System.Globalization.CultureInfo.InvariantCulture);
+                    if (dt < currentdt)
+                    {
+                        dt.AddDays(1);
+                    }
+                    int sec = (int)dt.Subtract(currentdt).TotalSeconds;
+                    if (sec > 0)
+                    {
+                        Console.WriteLine($"Program will sleep until <{dt.ToString("HH:mm")}>");
+                        System.Threading.Thread.Sleep(sec * 1000);
+                    }
+
+                }
+
+                DateTime curr = DateTime.Now;
+
+
+                ReportModel rm = new ReportModel(Upload, true);
+                rm.StartTime = DateTime.Now;
+                rm.TestCases = new List<ReportItem>();
+                LaunchConfig config = LaunchConfig.GetInstance();
+
+                if (btemplate.IsAsync)
+                {
+                    int asyncrdindex = 0;
+
+                    Utility.ThreadPool pool = new ThreadPool(btemplate.MaxThreads);
+
+                    int dependencyindex = 0;
+
+
+
+                    foreach (var batch in btemplate.Batch)
+                    {
+
+                        if (batch.IsDependencyQueue)
+                        {
+                            int maxsupporteddatalen = 0;
+                            if (batch.Groups.Count > 0)
+                            {
+                                string currentfile = batch.Groups[0].File;
+                                string currentsheet = batch.Groups[0].Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+
+                                if (type == null)
+                                {
+                                    Console.WriteLine($"Not Found Script {{{batch.Groups[0].name}}}");
+                                    continue;
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{batch.Groups[0].name}}} Error as more than 1 Constructor.");
+                                    continue;
+                                }
+
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
+
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
+                                ProviderModel dt = dp.ExtractData(batch.Groups[0].name, batch.Groups[0].scriptid);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                maxsupporteddatalen = list.Count;
+
+                                for (int n = 0; n < maxsupporteddatalen; n++)
+                                {
+                                    dependencyindex++;
+                                    var queue = new Queue<BatchScriptModel>();
+                                    foreach (var item in batch.Groups)
+                                    {
+                                        BatchScriptModel model = new BatchScriptModel();
+                                        model.Id = dependencyindex;
+                                        model.Index = n;
+                                        model.Name = item.name;
+                                        model.File = item.File;
+                                        model.Sheet = item.Sheet;
+                                        model.ScriptId = item.scriptid;
+
+                                        queue.Enqueue(model);
+                                    }
+                                    pool.DependencyQueues.Add(queue);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            foreach (var item in batch.Groups)
+                            {
+                                string currentfile = batch.Groups[0].File;
+                                string currentsheet = batch.Groups[0].Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+                                if (type == null)
+                                {
+                                    Console.WriteLine($"Not Found Script {{{batch.Groups[0].name}}}");
+                                    continue;
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{batch.Groups[0].name}}} Error as more than 1 Constructor.");
+                                    continue;
+                                }
+
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
+
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
+                                ProviderModel dt = dp.ExtractData(batch.Groups[0].name, batch.Groups[0].scriptid);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                int maxsupporteddatalen = list.Count;
+
+                                for (int n = 0; n < maxsupporteddatalen; n++)
+                                {
+
+
+                                    BatchScriptModel model = new BatchScriptModel();
+                                    model.Id = dependencyindex;
+                                    model.Index = n;
+                                    model.Name = item.name;
+                                    model.File = item.File;
+                                    model.Sheet = item.Sheet;
+                                    model.ScriptId = item.scriptid;
+
+
+                                    pool.NonDepQueue.Enqueue(model);
+                                }
+                            }
+                        }
+                    }
+
+
+                    List<Task<Tuple<bool?, int>>> tasks = new List<Task<Tuple<bool?, int>>>();
+
+                    for (int n = 0; n < btemplate.MaxThreads; n++)
+                    {
+                        var task = Task.Factory.StartNew<Tuple<bool?, int>>((d) =>
+                        {
+                            ReportItem testcase = null;
+                            BatchScriptModel model = pool.Next((int)d);
+
+                            if (model != null)
+                            {
+                                lock (obj)
+                                {
+                                    testcase = rm.TestCases.FirstOrDefault(t => t.Name == model.Name);
+                                    if (testcase == null)
+                                    {
+                                        testcase = new ReportItem();
+                                        testcase.Name = model.Name;
+                                        testcase.Details = new List<ReportItemDetail>();
+                                        rm.TestCases.Add(testcase);
+                                    }
+                                }
+                                string currentfile = model.File;
+                                string currentsheet = model.Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == model.Name);
+                                if (type == null)
+                                {
+                                    Console.WriteLine($"Not Found Script {{{model.Name}}}");
+                                    return new Tuple<bool?, int>(false, (int)d);
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{model.Name}}} Error as more than 1 Constructor.");
+                                    return new Tuple<bool?, int>(false, (int)d);
+                                }
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                testcase.Creator = scriptinfo.Creator;
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
+
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
+
+                                ProviderModel dt = dp.ExtractData(model.Name, model.ScriptId);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                if (list.Count < model.Index)
+                                {
+                                    return new Tuple<bool?, int>(false, (int)d);
+                                }
+
+                                int additionaldatasourceCount = 1;
+                                DataSource ds = null;
+                                System.Collections.IList additionaldatasource = null;
+
+                                if (scriptinfo.DataSource != null && scriptinfo.DataSource.BaseType == typeof(DataSource))
+                                {
+                                    try
+                                    {
+                                        ds = Activator.CreateInstance(scriptinfo.DataSource) as DataSource;
+                                        additionaldatasource = ds.ReadDataSource(scriptinfo.DisplayName, list[model.Index].Dict);
+                                        additionaldatasourceCount = additionaldatasource.Count;
+                                    }
+                                    catch (System.Exception edatasource)
+                                    {
+                                        Console.WriteLine(edatasource.Message);
+                                        Console.WriteLine(edatasource.StackTrace);
+                                        additionaldatasourceCount = 0;
+                                    }
+
+                                    if (additionaldatasourceCount == 0)
+                                    {
+                                        Console.WriteLine("Read additional DataSource is 0.");
+                                        return new Tuple<bool?, int>(false, (int)d);
+
+                                    }
+                                }
+                                bool executedstatus = true;
+                                for (int xx = 0; xx < additionaldatasourceCount; xx++)
+                                {
+                                    int rdindex;
+                                    lock (obj)
+                                    {
+                                        asyncrdindex++;
+                                        rdindex = asyncrdindex;
+                                    }
+
+                                    ReportItemDetail rd = new ReportItemDetail();
+                                    DateTime startTime = DateTime.Now;
+
+                                    testcase.Details.Add(rd);
+                                    string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
+                                    ScriptEventArgs scripteventargs = new ScriptEventArgs();
+                                    scripteventargs.Name = model.Name;
+                                    scripteventargs.ScriptId = model.ScriptId;
+
+                                    //init log
+
+                                    using (Log.Log log = Log.Log.GetLog($"{model.Name}_{currentdate}_{n}", config.LogFolderPath))
+                                    {
+                                        using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
+                                        {
+
+                                            IScript script = null;
+                                            try
+                                            {
+
+                                                script = Activator.CreateInstance(type) as IScript;
+
+                                                script.PropertyAssignment("Log", log);
+                                                if (ds != null)
+                                                {
+                                                    var inobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceInAttribute>() != null);
+                                                    if (inobjectfield != null)
+                                                    {
+                                                        try
+                                                        {
+                                                            inobjectfield.SetValue(script, additionaldatasource[xx]);
+                                                        }
+                                                        catch (System.Exception econvert)
+                                                        {
+                                                            Console.WriteLine(econvert.Message);
+                                                        }
+                                                    }
+                                                }
+
+
+
+
+                                                script.Test(list[model.Index].Dict);
+                                                var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+                                                foreach (var parameter in parameters)
+                                                {
+                                                    var objvalue = parameter.GetValue(script);
+                                                    var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                    var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                    if (parobj != null)
+                                                    {
+                                                        var handler = returntype.GetProperty("EndHandle").GetValue(parobj);
+
+                                                        if (handler != null)
+                                                        {
+                                                            MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                            try
+                                                            {
+                                                                handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                            }
+                                                            catch (System.Exception eh)
+                                                            {
+                                                                var ehinner = GetInnerException(eh);
+                                                                Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            var handlerasync = returntype.GetProperty("EndHandleAsync").GetValue(parobj);
+                                                            if (handlerasync != null)
+                                                            {
+                                                                MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                    task.Wait();
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                }
+
+                                                testcase.PassAdd();
+                                                rd.Status = ScriptStatus.Pass;
+                                            }
+                                            catch (Exception.AssertionException e)
+                                            {
+                                                Console.WriteLine(e.Message);
+                                                testcase.FailAdd();
+                                                executedstatus = false;
+                                                rd.Status = ScriptStatus.Fail;
+                                                rd.ErrorMessage = e.Message;
+
+                                                var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                foreach (var parameter in parameters)
+                                                {
+                                                    var objvalue = parameter.GetValue(script);
+                                                    var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                    var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                    if (parobj != null)
+                                                    {
+                                                        var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                        if (handler != null)
+                                                        {
+                                                            MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                            try
+                                                            {
+                                                                handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                            }
+                                                            catch (System.Exception eh)
+                                                            {
+                                                                var ehinner = GetInnerException(eh);
+                                                                Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                            if (handlerasync != null)
+                                                            {
+                                                                MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                    task.Wait();
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                log.Info("------------------------------------Failed------------------------------------\r\n");
+                                                log.Info($"{e.Message}\r\n");
+                                                log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                log.Info($"{e.StackTrace}\r\n");
+
+                                                scripteventargs.Message = e.Message;
+                                                scripteventargs.Trace = e.StackTrace?.ToString();
+                                            }
+                                            catch (System.Exception e)
+                                            {
+                                                var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                foreach (var parameter in parameters)
+                                                {
+                                                    var objvalue = parameter.GetValue(script);
+                                                    var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                    var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                    if (parobj != null)
+                                                    {
+                                                        var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                        if (handler != null)
+                                                        {
+                                                            MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                            try
+                                                            {
+                                                                handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                            }
+                                                            catch (System.Exception eh)
+                                                            {
+                                                                var ehinner = GetInnerException(eh);
+                                                                Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                            if (handlerasync != null)
+                                                            {
+                                                                MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                    task.Wait();
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                var innerex = GetInnerException(e);
+                                                log.Info("------------------------------------Error------------------------------------\r\n");
+                                                log.Info($"{innerex.Message}\r\n");
+                                                log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                log.Info($"{innerex.StackTrace}\r\n");
+                                                Console.WriteLine(innerex.Message);
+                                                testcase.ErrorAdd();
+                                                executedstatus = false;
+                                                rd.Status = ScriptStatus.Error;
+                                                rd.ErrorMessage = innerex.Message;
+
+                                                scripteventargs.Message = innerex.Message;
+                                                scripteventargs.Trace = innerex.StackTrace?.ToString();
+
+                                            }
+
+                                            scripteventargs.Data = JsonConvert.DeserializeObject<AFWDictionary<string>>(JsonConvert.SerializeObject(list[model.Index].Dict));
+                                            scripteventargs.Status = rd.Status;
+                                            scripteventargs.AdditionalInfo = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+
+                                            if (string.IsNullOrEmpty(script.PropertyValue<string>("CaseId")))
+                                            {
+                                                var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
+                                                if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                {
+                                                    script.PropertyAssignment("CaseId", caseiddata.Value);
+                                                }
+                                            }
+
+                                            if (string.IsNullOrEmpty(script.PropertyValue<string>("ReportName")))
+                                            {
+                                                var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
+                                                if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                {
+                                                    script.PropertyAssignment("ReportName", caseiddata.Value);
+                                                }
+                                            }
+
+                                            rd.Name = script.PropertyValue<string>("ReportName");
+
+                                            if (string.IsNullOrEmpty(script.PropertyValue<string>("ScriptId")))
+                                            {
+                                                var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "scriptid" == t.Key.ToLower());
+                                                if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                {
+                                                    script.PropertyAssignment("ScriptId", caseiddata.Value);
+                                                }
+                                            }
+                                            log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                            log.InsertHTML($"<div>{model.Name}</div>\r\n");
+
+                                            scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
+
+                                            if (ds != null)
+                                            {
+                                                var outobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceOutAttribute>() != null);
+                                                object senddata = null;
+                                                if (outobjectfield != null)
+                                                {
+                                                    senddata = outobjectfield.GetValue(script);
+
+                                                }
+                                                try
+                                                {
+                                                    ds.WriteDataSource(scriptinfo.DisplayName, list[model.Index].Dict, senddata, rd.Status);
+                                                }
+                                                catch (System.Exception eDataSource)
+                                                {
+                                                    Console.WriteLine(eDataSource.Message);
+                                                    Console.WriteLine(eDataSource.StackTrace);
+                                                    log.Info("------------------------------------Additional Data Source Error------------------------------------\r\n");
+                                                    log.Info($"{eDataSource.Message}\r\n");
+                                                    log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                    log.Info($"{eDataSource.StackTrace}\r\n");
+                                                }
+
+                                            }
+
+                                            testcase.CountAdd();
+                                            rd.Log = log.Stores.Clone();
+                                            rd.Data = list[model.Index].Dict;
+                                            rd.Duration = DateTime.Now - startTime;
+
+
+                                            var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+                                            sai.SetMember("SetId", model.SetId);
+                                            rm.GenDetailReport($"{model.Name}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath, rd, rdindex, script, scripteventargs);
+                                        }
+                                    }
+                                    try
+                                    {
+                                        dp.Update(dt);
+                                    }
+                                    catch (System.Exception ee)
+                                    {
+                                        Console.WriteLine(ee.Message);
+                                    }
+                                    config.OnAfterScripotCompleted(scripteventargs);
+                                }
+                                return new Tuple<bool?, int>(executedstatus, (int)d);
+                            }
+                            else
+                            {
+                                return new Tuple<bool?, int>(null, (int)d);
+                            }
+                        }, n);
+                        tasks.Add(task);
+                    }
+                    int num = tasks.Count;
+
+                    while (num != 0)
+                    {
+                        var availbletasks = tasks.Where(t => t.Status == TaskStatus.RanToCompletion || t.Status == TaskStatus.Faulted || t.Status == TaskStatus.Canceled).ToList();
+
+                        foreach (var item in availbletasks)
+                        {
+                            tasks.Remove(item);
+                            Tuple<bool?, int> result = item.Result;
+                            if (result.Item1 != null)
+                            {
+                                var task = Task.Factory.StartNew<Tuple<bool?, int>>((d) =>
+                                {
+                                    ReportItem testcase = null;
+                                    BatchScriptModel model = pool.Next((int)d, !result.Item1.Value);
+
+                                    if (model != null)
+                                    {
+                                        lock (obj)
+                                        {
+                                            testcase = rm.TestCases.FirstOrDefault(t => t.Name == model.Name);
+                                            if (testcase == null)
+                                            {
+                                                testcase = new ReportItem();
+                                                testcase.Name = model.Name;
+                                                testcase.Details = new List<ReportItemDetail>();
+                                                rm.TestCases.Add(testcase);
+                                            }
+                                        }
+                                        string currentfile = model.File;
+                                        string currentsheet = model.Sheet;
+                                        var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == model.Name);
+                                        if (type == null)
+                                        {
+                                            Console.WriteLine($"Not Found Script {{{model.Name}}}");
+                                            return new Tuple<bool?, int>(false, (int)d);
+                                        }
+                                        if (type.GetConstructors().Count() > 1)
+                                        {
+                                            Console.WriteLine($"Script {{{model.Name}}} Error as more than 1 Constructor.");
+                                            return new Tuple<bool?, int>(false, (int)d);
+                                        }
+                                        var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                        testcase.Creator = scriptinfo.Creator;
+                                        if (string.IsNullOrEmpty(currentfile))
+                                        {
+                                            currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                        }
+                                        if (string.IsNullOrEmpty(currentsheet))
+                                        {
+                                            currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                        }
+
+                                        DataProvider dp = new DataProvider(currentfile, currentsheet);
+
+                                        ProviderModel dt = dp.ExtractData(model.Name, model.ScriptId);
+                                        var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                        if (list.Count < model.Index)
+                                        {
+                                            return new Tuple<bool?, int>(false, (int)d);
+                                        }
+
+                                        int additionaldatasourceCount = 1;
+                                        DataSource ds = null;
+                                        System.Collections.IList additionaldatasource = null;
+
+                                        if (scriptinfo.DataSource != null && scriptinfo.DataSource.BaseType == typeof(DataSource))
+                                        {
+                                            try
+                                            {
+                                                ds = Activator.CreateInstance(scriptinfo.DataSource) as DataSource;
+                                                additionaldatasource = ds.ReadDataSource(scriptinfo.DisplayName, list[model.Index].Dict);
+                                                additionaldatasourceCount = additionaldatasource.Count;
+                                            }
+                                            catch (System.Exception edatasource)
+                                            {
+                                                Console.WriteLine(edatasource.Message);
+                                                Console.WriteLine(edatasource.StackTrace);
+                                                additionaldatasourceCount = 0;
+                                            }
+
+                                            if (additionaldatasourceCount == 0)
+                                            {
+                                                Console.WriteLine("Read additional DataSource is 0.");
+                                                return new Tuple<bool?, int>(false, (int)d);
+
+                                            }
+                                        }
+                                        bool executedstatus = true;
+                                        for (int xx = 0; xx < additionaldatasourceCount; xx++)
+                                        {
+                                            int rdindex;
+                                            lock (obj)
+                                            {
+                                                asyncrdindex++;
+                                                rdindex = asyncrdindex;
+                                            }
+
+                                            ReportItemDetail rd = new ReportItemDetail();
+                                            DateTime startTime = DateTime.Now;
+
+                                            testcase.Details.Add(rd);
+                                            string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
+                                            ScriptEventArgs scripteventargs = new ScriptEventArgs();
+                                            scripteventargs.Name = model.Name;
+                                            scripteventargs.ScriptId = model.ScriptId;
+
+                                            //init log
+
+                                            using (Log.Log log = Log.Log.GetLog($"{model.Name}_{currentdate}_{(int)d}", config.LogFolderPath))
+                                            {
+                                                using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
+                                                {
+
+                                                    IScript script = null;
+                                                    try
+                                                    {
+
+                                                        script = Activator.CreateInstance(type) as IScript;
+
+                                                        script.PropertyAssignment("Log", log);
+                                                        if (ds != null)
+                                                        {
+                                                            var inobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceInAttribute>() != null);
+                                                            if (inobjectfield != null)
+                                                            {
+                                                                try
+                                                                {
+                                                                    inobjectfield.SetValue(script, additionaldatasource[xx]);
+                                                                }
+                                                                catch (System.Exception econvert)
+                                                                {
+                                                                    Console.WriteLine(econvert.Message);
+                                                                }
+                                                            }
+                                                        }
+
+
+
+
+                                                        script.Test(list[model.Index].Dict);
+                                                        var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("EndHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("EndHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+
+                                                        }
+
+                                                        testcase.PassAdd();
+                                                        rd.Status = ScriptStatus.Pass;
+                                                    }
+                                                    catch (Exception.AssertionException e)
+                                                    {
+                                                        Console.WriteLine(e.Message);
+                                                        testcase.FailAdd();
+                                                        executedstatus = false;
+                                                        rd.Status = ScriptStatus.Fail;
+                                                        rd.ErrorMessage = e.Message;
+
+                                                        var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        log.Info("------------------------------------Failed------------------------------------\r\n");
+                                                        log.Info($"{e.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{e.StackTrace}\r\n");
+
+                                                        scripteventargs.Message = e.Message;
+                                                        scripteventargs.Trace = e.StackTrace?.ToString();
+                                                    }
+                                                    catch (System.Exception e)
+                                                    {
+                                                        var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        var innerex = GetInnerException(e);
+                                                        log.Info("------------------------------------Error------------------------------------\r\n");
+                                                        log.Info($"{innerex.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{innerex.StackTrace}\r\n");
+                                                        Console.WriteLine(innerex.Message);
+                                                        testcase.ErrorAdd();
+                                                        executedstatus = false;
+                                                        rd.Status = ScriptStatus.Error;
+                                                        rd.ErrorMessage = innerex.Message;
+
+                                                        scripteventargs.Message = innerex.Message;
+                                                        scripteventargs.Trace = innerex.StackTrace?.ToString();
+
+                                                    }
+
+                                                    scripteventargs.Data = JsonConvert.DeserializeObject<AFWDictionary<string>>(JsonConvert.SerializeObject(list[model.Index].Dict));
+                                                    scripteventargs.Status = rd.Status;
+                                                    scripteventargs.AdditionalInfo = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("CaseId")))
+                                                    {
+                                                        var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("CaseId", caseiddata.Value);
+                                                        }
+                                                    }
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("ReportName")))
+                                                    {
+                                                        var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("ReportName", caseiddata.Value);
+                                                        }
+                                                    }
+
+                                                    rd.Name = script.PropertyValue<string>("ReportName");
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("ScriptId")))
+                                                    {
+                                                        var caseiddata = list[model.Index].Dict.FirstOrDefault(t => "scriptid" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("ScriptId", caseiddata.Value);
+                                                        }
+                                                    }
+                                                    log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                    log.InsertHTML($"<div>{model.Name}</div>\r\n");
+
+                                                    scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
+
+                                                    if (ds != null)
+                                                    {
+                                                        var outobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceOutAttribute>() != null);
+                                                        object senddata = null;
+                                                        if (outobjectfield != null)
+                                                        {
+                                                            senddata = outobjectfield.GetValue(script);
+
+                                                        }
+                                                        try
+                                                        {
+                                                            ds.WriteDataSource(scriptinfo.DisplayName, list[model.Index].Dict, senddata, rd.Status);
+                                                        }
+                                                        catch (System.Exception eDataSource)
+                                                        {
+                                                            Console.WriteLine(eDataSource.Message);
+                                                            Console.WriteLine(eDataSource.StackTrace);
+                                                            log.Info("------------------------------------Additional Data Source Error------------------------------------\r\n");
+                                                            log.Info($"{eDataSource.Message}\r\n");
+                                                            log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                            log.Info($"{eDataSource.StackTrace}\r\n");
+                                                        }
+
+                                                    }
+
+                                                    testcase.CountAdd();
+                                                    rd.Log = log.Stores.Clone();
+                                                    rd.Data = list[model.Index].Dict;
+                                                    rd.Duration = DateTime.Now - startTime;
+
+
+                                                    var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+                                                    sai.SetMember("SetId", model.SetId);
+                                                    rm.GenDetailReport($"{model.Name}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath, rd, rdindex, script, scripteventargs);
+                                                }
+                                            }
+                                            try
+                                            {
+                                                dp.Update(dt);
+                                            }
+                                            catch (System.Exception ee)
+                                            {
+                                                Console.WriteLine(ee.Message);
+                                            }
+                                            config.OnAfterScripotCompleted(scripteventargs);
+                                        }
+                                        return new Tuple<bool?, int>(executedstatus, (int)d);
+                                    }
+                                    else
+                                    {
+                                        return new Tuple<bool?, int>(null, (int)d);
+                                    }
+                                }, result.Item2);
+                                tasks.Add(task);
+                            }
+
+                        }
+                        num = tasks.Count;
+                    }
+                }
+                else
+                {
+                    int rdindex = 0;
+                    foreach (var batch in btemplate.Batch)
+                    {
+                        if (batch.IsDependencyQueue)
+                        {
+                            int maxsupporteddatalen = 0;
+                            if (batch.Groups.Count > 0)
+                            {
+                                string currentfile = batch.Groups[0].File;
+                                string currentsheet = batch.Groups[0].Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+
+                                if (type == null)
+                                {
+                                    Console.WriteLine($"Not Found Script {{{batch.Groups[0].name}}}");
+                                    continue;
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{batch.Groups[0].name}}} Error as more than 1 Constructor.");
+                                    continue;
+                                }
+
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
+
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
+                                ProviderModel dt = dp.ExtractData(batch.Groups[0].name, batch.Groups[0].scriptid);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+                                maxsupporteddatalen = list.Count;
+
+                                for (int n = 0; n < maxsupporteddatalen; n++)
+                                {
+
+
+                                    foreach (var item in batch.Groups)
+                                    {
+                                        bool isbreak = false;
+
+                                        string currentrunfile = item.File;
+                                        string currentrunsheet = item.Sheet;
+
+                                        int additionaldatasourceCount = 1;
+                                        DataSource ds = null;
+                                        System.Collections.IList additionaldatasource = null;
+
+                                        var runtype = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == item.name);
+                                        if (runtype == null)
+                                        {
+                                            Console.WriteLine($"Not found Scirpt {{{item.name}}}");
+                                            break;
+                                        }
+                                        if (runtype.GetConstructors().Count() > 1)
+                                        {
+                                            Console.WriteLine($"Script {{{item.name}}} Error as more than 1 Constructor.");
+                                            break;
+                                        }
+                                        var runscriptinfo = runtype.GetCustomAttribute<ScriptAttribute>();
+
+                                        if (string.IsNullOrEmpty(currentfile))
+                                        {
+                                            currentrunfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(runscriptinfo.DataFile) ? this.DataFile : runscriptinfo.DataFile : btemplate.File;
+                                        }
+                                        if (string.IsNullOrEmpty(currentsheet))
+                                        {
+                                            currentrunsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(runscriptinfo.SheetName) ? this.SheetName : runscriptinfo.SheetName : btemplate.Sheet;
+                                        }
+                                        DataProvider rundp = new DataProvider(currentrunfile, currentrunsheet);
+
+                                        ProviderModel rundt = rundp.ExtractData(item.name, item.scriptid);
+                                        var runlist = rundt.list.Where(t => t.IsEnabled).ToList();
+                                        if (runlist.Count < n)
+                                        {
+                                            break;
+                                        }
+
+                                        if (runscriptinfo.DataSource != null && runscriptinfo.DataSource.BaseType == typeof(DataSource))
+                                        {
+                                            try
+                                            {
+                                                ds = Activator.CreateInstance(runscriptinfo.DataSource) as DataSource;
+                                                additionaldatasource = ds.ReadDataSource(runscriptinfo.DisplayName, runlist[n].Dict);
+                                                additionaldatasourceCount = additionaldatasource.Count;
+                                            }
+                                            catch (System.Exception edatasource)
+                                            {
+                                                Console.WriteLine(edatasource.Message);
+                                                Console.WriteLine(edatasource.StackTrace);
+                                                additionaldatasourceCount = 0;
+                                            }
+
+                                            if (additionaldatasourceCount == 0)
+                                            {
+                                                Console.WriteLine("Read additional DataSource is 0.");
+                                                break;
+
+                                            }
+                                        }
+
+                                        ReportItem testcase = rm.TestCases.FirstOrDefault(t => t.Name == item.name);
+                                        if (testcase == null)
+                                        {
+                                            testcase = new ReportItem();
+                                            testcase.Name = item.name;
+                                            testcase.Creator = runscriptinfo.Creator;
+                                            testcase.Details = new List<ReportItemDetail>();
+                                            rm.TestCases.Add(testcase);
+                                        }
+
+                                        for (int xx = 0; xx < additionaldatasourceCount; xx++)
+                                        {
+                                            rdindex++;
+
+                                            ReportItemDetail rd = new ReportItemDetail();
+                                            DateTime startTime = DateTime.Now;
+
+                                            testcase.Details.Add(rd);
+                                            string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
+                                            ScriptEventArgs scripteventargs = new ScriptEventArgs();
+                                            scripteventargs.Name = item.name;
+                                            scripteventargs.ScriptId = item.scriptid;
+
+                                            //init log
+
+                                            using (Log.Log log = Log.Log.GetLog($"{item.name}_{currentdate}_{n}", config.LogFolderPath))
+                                            {
+                                                using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
+                                                {
+
+                                                    IScript script = null;
+                                                    try
+                                                    {
+
+                                                        script = Activator.CreateInstance(type) as IScript;
+
+                                                        script.PropertyAssignment("Log", log);
+                                                        if (ds != null)
+                                                        {
+                                                            var inobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceInAttribute>() != null);
+                                                            if (inobjectfield != null)
+                                                            {
+                                                                try
+                                                                {
+                                                                    inobjectfield.SetValue(script, additionaldatasource[xx]);
+                                                                }
+                                                                catch (System.Exception econvert)
+                                                                {
+                                                                    Console.WriteLine(econvert.Message);
+                                                                }
+                                                            }
+                                                        }
+
+
+
+
+                                                        script.Test(runlist[n].Dict);
+                                                        var parameters = runtype.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("EndHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("EndHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+
+                                                        }
+
+                                                        testcase.PassAdd();
+                                                        rd.Status = ScriptStatus.Pass;
+                                                    }
+                                                    catch (Exception.AssertionException e)
+                                                    {
+                                                        Console.WriteLine(e.Message);
+                                                        testcase.FailAdd();
+                                                        rd.Status = ScriptStatus.Fail;
+                                                        rd.ErrorMessage = e.Message;
+
+                                                        isbreak = true;
+
+                                                        var parameters = runtype.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        log.Info("------------------------------------Failed------------------------------------\r\n");
+                                                        log.Info($"{e.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{e.StackTrace}\r\n");
+
+                                                        scripteventargs.Message = e.Message;
+                                                        scripteventargs.Trace = e.StackTrace?.ToString();
+                                                    }
+                                                    catch (System.Exception e)
+                                                    {
+                                                        var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                        foreach (var parameter in parameters)
+                                                        {
+                                                            var objvalue = parameter.GetValue(script);
+                                                            var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                            var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                            if (parobj != null)
+                                                            {
+                                                                var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                                if (handler != null)
+                                                                {
+                                                                    MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                                else
+                                                                {
+                                                                    var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                    if (handlerasync != null)
+                                                                    {
+                                                                        MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                        try
+                                                                        {
+                                                                            var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                            task.Wait();
+                                                                        }
+                                                                        catch (System.Exception eh)
+                                                                        {
+                                                                            var ehinner = GetInnerException(eh);
+                                                                            Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        var innerex = GetInnerException(e);
+                                                        log.Info("------------------------------------Error------------------------------------\r\n");
+                                                        log.Info($"{innerex.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{innerex.StackTrace}\r\n");
+                                                        Console.WriteLine(innerex.Message);
+                                                        testcase.ErrorAdd();
+
+                                                        rd.Status = ScriptStatus.Error;
+                                                        rd.ErrorMessage = innerex.Message;
+
+                                                        scripteventargs.Message = innerex.Message;
+                                                        scripteventargs.Trace = innerex.StackTrace?.ToString();
+                                                        isbreak = true;
+                                                    }
+
+                                                    scripteventargs.Data = JsonConvert.DeserializeObject<AFWDictionary<string>>(JsonConvert.SerializeObject(runlist[n].Dict));
+                                                    scripteventargs.Status = rd.Status;
+                                                    scripteventargs.AdditionalInfo = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("CaseId")))
+                                                    {
+                                                        var caseiddata = runlist[n].Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("CaseId", caseiddata.Value);
+                                                        }
+                                                    }
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("ReportName")))
+                                                    {
+                                                        var caseiddata = runlist[n].Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("ReportName", caseiddata.Value);
+                                                        }
+                                                    }
+
+                                                    rd.Name = script.PropertyValue<string>("ReportName");
+
+                                                    if (string.IsNullOrEmpty(script.PropertyValue<string>("ScriptId")))
+                                                    {
+                                                        var caseiddata = runlist[n].Dict.FirstOrDefault(t => "scriptid" == t.Key.ToLower());
+                                                        if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                        {
+                                                            script.PropertyAssignment("ScriptId", caseiddata.Value);
+                                                        }
+                                                    }
+                                                    log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                    log.InsertHTML($"<div>{item.name}</div>\r\n");
+
+                                                    scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
+
+                                                    if (ds != null)
+                                                    {
+                                                        var outobjectfield = runtype.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceOutAttribute>() != null);
+                                                        object senddata = null;
+                                                        if (outobjectfield != null)
+                                                        {
+                                                            senddata = outobjectfield.GetValue(script);
+
+                                                        }
+                                                        try
+                                                        {
+                                                            ds.WriteDataSource(runscriptinfo.DisplayName, runlist[n].Dict, senddata, rd.Status);
+                                                        }
+                                                        catch (System.Exception eDataSource)
+                                                        {
+                                                            Console.WriteLine(eDataSource.Message);
+                                                            Console.WriteLine(eDataSource.StackTrace);
+                                                            log.Info("------------------------------------Additional Data Source Error------------------------------------\r\n");
+                                                            log.Info($"{eDataSource.Message}\r\n");
+                                                            log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                            log.Info($"{eDataSource.StackTrace}\r\n");
+                                                        }
+
+                                                    }
+
+                                                    testcase.CountAdd();
+                                                    rd.Log = log.Stores.Clone();
+                                                    rd.Data = runlist[n].Dict;
+                                                    rd.Duration = DateTime.Now - startTime;
+
+
+                                                    var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+                                                    sai.SetMember("SetId", batch.SetId);
+                                                    rm.GenDetailReport($"{item.name}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath, rd, rdindex, script, scripteventargs);
+                                                    if (isbreak)
+                                                    {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            try
+                                            {
+                                                rundp.Update(dt);
+                                            }
+                                            catch (System.Exception ee)
+                                            {
+                                                Console.WriteLine(ee.Message);
+                                            }
+                                            config.OnAfterScripotCompleted(scripteventargs);
+                                        }
+                                        if (isbreak)
+                                        {
+                                            break;
+                                        }
+
+                                    }
+
+                                }
+                            }
+                            else
+                            {
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            foreach (var item in batch.Groups)
+                            {
+                                string currentfile =item.File;
+                                string currentsheet = item.Sheet;
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == item.name);
+                                if (type == null)
+                                {
+                                    Console.WriteLine($"Not Found Script {{{item.name}}}");
+                                    continue;
+                                }
+                                if (type.GetConstructors().Count() > 1)
+                                {
+                                    Console.WriteLine($"Script {{{item.name}}} Error as more than 1 Constructor.");
+                                    continue;
+                                }
+
+                                var scriptinfo = type.GetCustomAttribute<ScriptAttribute>();
+                                if (string.IsNullOrEmpty(currentfile))
+                                {
+                                    currentfile = string.IsNullOrEmpty(btemplate.File) ? string.IsNullOrEmpty(scriptinfo.DataFile) ? this.DataFile : scriptinfo.DataFile : btemplate.File;
+                                }
+                                if (string.IsNullOrEmpty(currentsheet))
+                                {
+                                    currentsheet = string.IsNullOrEmpty(btemplate.Sheet) ? string.IsNullOrEmpty(scriptinfo.SheetName) ? this.SheetName : scriptinfo.SheetName : btemplate.Sheet;
+                                }
+
+                                DataProvider dp = new DataProvider(currentfile, currentsheet);
+                                ProviderModel dt = dp.ExtractData(item.name,item.scriptid);
+                                var list = dt.list.Where(t => t.IsEnabled).ToList();
+
+                                ReportItem testcase = rm.TestCases.FirstOrDefault(t => t.Name == item.name);
+
+                                if (testcase == null)
+                                {
+                                    testcase = new ReportItem();
+                                    testcase.Name =item.name;
+                                    testcase.Creator = scriptinfo.Creator;
+                                    testcase.Details = new List<ReportItemDetail>();
+                                    rm.TestCases.Add(testcase);
+                                }
+
+                                int index = 0;
+                                foreach(DataModel row in list)
+                                {
+                                    int additionaldatasourceCount = 1;
+                                    DataSource ds = null;
+                                    System.Collections.IList additionaldatasource = null;
+
+                               
+                                    if (scriptinfo.DataSource != null && scriptinfo.DataSource.BaseType == typeof(DataSource))
+                                    {
+                                        try
+                                        {
+                                            ds = Activator.CreateInstance(scriptinfo.DataSource) as DataSource;
+                                            additionaldatasource = ds.ReadDataSource(scriptinfo.DisplayName, row.Dict);
+                                            additionaldatasourceCount = additionaldatasource.Count;
+                                        }
+                                        catch (System.Exception edatasource)
+                                        {
+                                            Console.WriteLine(edatasource.Message);
+                                            Console.WriteLine(edatasource.StackTrace);
+                                            additionaldatasourceCount = 0;
+                                        }
+
+                                        if (additionaldatasourceCount == 0)
+                                        {
+                                            Console.WriteLine("Read additional DataSource is 0.");
+                                            continue;
+
+                                        }
+                                    }
+                                    for (int xx = 0; xx < additionaldatasourceCount; xx++)
+                                    {
+                                        rdindex++;
+                                        index++;
+                                     
+
+                                        ReportItemDetail rd = new ReportItemDetail();
+                                        DateTime startTime = DateTime.Now;
+
+                                        testcase.Details.Add(rd);
+                                        string currentdate = DateTime.Now.ToString("MMddyyyyHHmmss");
+                                        ScriptEventArgs scripteventargs = new ScriptEventArgs();
+                                        scripteventargs.Name = item.name;
+                                        scripteventargs.ScriptId = item.scriptid;
+
+                                        //init log
+
+                                        using (Log.Log log = Log.Log.GetLog($"{item.name}_{currentdate}_{index}", config.LogFolderPath))
+                                        {
+                                            using (Log.ResponseContent contents = Log.ResponseContent.GetInstance())
+                                            {
+
+                                                IScript script = null;
+                                                try
+                                                {
+
+                                                    script = Activator.CreateInstance(type) as IScript;
+
+                                                    script.PropertyAssignment("Log", log);
+                                                    if (ds != null)
+                                                    {
+                                                        var inobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceInAttribute>() != null);
+                                                        if (inobjectfield != null)
+                                                        {
+                                                            try
+                                                            {
+                                                                inobjectfield.SetValue(script, additionaldatasource[xx]);
+                                                            }
+                                                            catch (System.Exception econvert)
+                                                            {
+                                                                Console.WriteLine(econvert.Message);
+                                                            }
+                                                        }
+                                                    }
+
+
+
+
+                                                    script.Test(row.Dict);
+                                                    var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+                                                    foreach (var parameter in parameters)
+                                                    {
+                                                        var objvalue = parameter.GetValue(script);
+                                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                        if (parobj != null)
+                                                        {
+                                                            var handler = returntype.GetProperty("EndHandle").GetValue(parobj);
+
+                                                            if (handler != null)
+                                                            {
+                                                                MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                            else
+                                                            {
+                                                                var handlerasync = returntype.GetProperty("EndHandleAsync").GetValue(parobj);
+                                                                if (handlerasync != null)
+                                                                {
+                                                                    MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                        task.Wait();
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"EndHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                    }
+
+                                                    testcase.PassAdd();
+                                                    rd.Status = ScriptStatus.Pass;
+                                                }
+                                                catch (Exception.AssertionException e)
+                                                {
+                                                    Console.WriteLine(e.Message);
+                                                    testcase.FailAdd();
+                                                    rd.Status = ScriptStatus.Fail;
+                                                    rd.ErrorMessage = e.Message;
+
+                                                    var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                    foreach (var parameter in parameters)
+                                                    {
+                                                        var objvalue = parameter.GetValue(script);
+                                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                        if (parobj != null)
+                                                        {
+                                                            var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                            if (handler != null)
+                                                            {
+                                                                MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                            else
+                                                            {
+                                                                var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                if (handlerasync != null)
+                                                                {
+                                                                    MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                        task.Wait();
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    log.Info("------------------------------------Failed------------------------------------\r\n");
+                                                    log.Info($"{e.Message}\r\n");
+                                                    log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                    log.Info($"{e.StackTrace}\r\n");
+
+                                                    scripteventargs.Message = e.Message;
+                                                    scripteventargs.Trace = e.StackTrace?.ToString();
+                                                }
+                                                catch (System.Exception e)
+                                                {
+                                                    var parameters = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(t => t.GetCustomAttribute<InjectAttribute>() != null).ToList();
+
+                                                    foreach (var parameter in parameters)
+                                                    {
+                                                        var objvalue = parameter.GetValue(script);
+                                                        var returntype = typeof(RegistrationBuilder<>).MakeGenericType(parameter.FieldType);
+                                                        var parobj = Convert.ChangeType(config.GetRB(parameter.FieldType), returntype);
+                                                        if (parobj != null)
+                                                        {
+                                                            var handler = returntype.GetProperty("ExceptionHandle").GetValue(parobj);
+
+                                                            if (handler != null)
+                                                            {
+                                                                MethodInfo handlerMethod = handler.GetType().GetMethod("Invoke");
+                                                                try
+                                                                {
+                                                                    handlerMethod.Invoke(handler, new object[] { objvalue, log });
+                                                                }
+                                                                catch (System.Exception eh)
+                                                                {
+                                                                    var ehinner = GetInnerException(eh);
+                                                                    Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                }
+                                                            }
+                                                            else
+                                                            {
+                                                                var handlerasync = returntype.GetProperty("ExceptionHandleAsync").GetValue(parobj);
+                                                                if (handlerasync != null)
+                                                                {
+                                                                    MethodInfo handlerMethodasync = handlerasync.GetType().GetMethod("Invoke");
+                                                                    try
+                                                                    {
+                                                                        var task = handlerMethodasync.Invoke(handlerasync, new object[] { objvalue, log }) as Task;
+                                                                        task.Wait();
+                                                                    }
+                                                                    catch (System.Exception eh)
+                                                                    {
+                                                                        var ehinner = GetInnerException(eh);
+                                                                        Console.WriteLine($"ExceptionHandle found exception:{ehinner.Message}");
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    var innerex = GetInnerException(e);
+                                                    log.Info("------------------------------------Error------------------------------------\r\n");
+                                                    log.Info($"{innerex.Message}\r\n");
+                                                    log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                    log.Info($"{innerex.StackTrace}\r\n");
+                                                    Console.WriteLine(innerex.Message);
+                                                    testcase.ErrorAdd();
+                                                    rd.Status = ScriptStatus.Error;
+                                                    rd.ErrorMessage = innerex.Message;
+
+                                                    scripteventargs.Message = innerex.Message;
+                                                    scripteventargs.Trace = innerex.StackTrace?.ToString();
+
+                                                }
+
+                                                scripteventargs.Data = JsonConvert.DeserializeObject<AFWDictionary<string>>(JsonConvert.SerializeObject(row.Dict));
+                                                scripteventargs.Status = rd.Status;
+                                                scripteventargs.AdditionalInfo = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+
+                                                if (string.IsNullOrEmpty(script.PropertyValue<string>("CaseId")))
+                                                {
+                                                    var caseiddata =row.Dict.FirstOrDefault(t => "caseid" == t.Key.ToLower());
+                                                    if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                    {
+                                                        script.PropertyAssignment("CaseId", caseiddata.Value);
+                                                    }
+                                                }
+
+                                                if (string.IsNullOrEmpty(script.PropertyValue<string>("ReportName")))
+                                                {
+                                                    var caseiddata =row.Dict.FirstOrDefault(t => "reportname" == t.Key.ToLower());
+                                                    if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                    {
+                                                        script.PropertyAssignment("ReportName", caseiddata.Value);
+                                                    }
+                                                }
+
+                                                rd.Name = script.PropertyValue<string>("ReportName");
+
+                                                if (string.IsNullOrEmpty(script.PropertyValue<string>("ScriptId")))
+                                                {
+                                                    var caseiddata = row.Dict.FirstOrDefault(t => "scriptid" == t.Key.ToLower());
+                                                    if (!string.IsNullOrEmpty(caseiddata.Value))
+                                                    {
+                                                        script.PropertyAssignment("ScriptId", caseiddata.Value);
+                                                    }
+                                                }
+                                                log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                log.InsertHTML($"<div>{item.name}</div>\r\n");
+
+                                                scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
+
+                                                if (ds != null)
+                                                {
+                                                    var outobjectfield = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(t => t.GetCustomAttribute<DataSourceOutAttribute>() != null);
+                                                    object senddata = null;
+                                                    if (outobjectfield != null)
+                                                    {
+                                                        senddata = outobjectfield.GetValue(script);
+
+                                                    }
+                                                    try
+                                                    {
+                                                        ds.WriteDataSource(scriptinfo.DisplayName, row.Dict, senddata, rd.Status);
+                                                    }
+                                                    catch (System.Exception eDataSource)
+                                                    {
+                                                        Console.WriteLine(eDataSource.Message);
+                                                        Console.WriteLine(eDataSource.StackTrace);
+                                                        log.Info("------------------------------------Additional Data Source Error------------------------------------\r\n");
+                                                        log.Info($"{eDataSource.Message}\r\n");
+                                                        log.Info("------------------------------------Tracking------------------------------------\r\n");
+                                                        log.Info($"{eDataSource.StackTrace}\r\n");
+                                                    }
+
+                                                }
+
+                                                testcase.CountAdd();
+                                                rd.Log = log.Stores.Clone();
+                                                rd.Data =row.Dict;
+                                                rd.Duration = DateTime.Now - startTime;
+
+
+                                                var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
+                                                sai.SetMember("SetId", batch.SetId);
+                                                rm.GenDetailReport($"{item.name}_{curr.ToString("MMddyyyyHHmmss")}.html", config.LogFolderPath, rd, rdindex, script, scripteventargs);
+                                            }
+                                        }
+                                        config.OnAfterScripotCompleted(scripteventargs);
+                                       
+                                    }
+
+                                }
+                                try
+                                {
+                                    dp.Update(dt);
+                                }
+                                catch (System.Exception ee)
+                                {
+                                    Console.WriteLine(ee.Message);
+                                }
+                            }
+                        }
+                      
+                    }
+
+                }
+
+                rm.Duration = (DateTime.Now - rm.StartTime).Duration();
+                rm.GenReport($"batchrun_{curr.ToString("MMddyyyyHHmmss")}.html",config.LogFolderPath);
+                Console.WriteLine("script completed execution.");
+       
+
+
         }
+
     }
 }

@@ -4,24 +4,29 @@ using System.Linq;
 using System.Collections.Generic;
 using System;
 using System.Drawing;
+using System.Threading;
+using System.Drawing.Imaging;
+using System.Reflection.Metadata;
 
-namespace ApiFrameWork.Log
+namespace AutoFrameWork.Log
 {
     public class Log : System.IDisposable
     {
-        private static Log _log;
+        private static AsyncLocal<Log> _log= new AsyncLocal<Log>();
         private static object obj = new object();
+
+        private long _encoderQuality;
 
         internal static Log GetLog(string fileName, string fileFolder)
         {
             lock (obj)
             {
-                if (_log == null || fileName != _log.FileName)
+                if (_log.Value == null || fileName != _log.Value.FileName)
                 {
-                    _log = new Log(fileName, fileFolder);
+                    _log.Value = new Log(fileName, fileFolder);
                 }
             }
-            return _log;
+            return _log.Value;
 
         }
 
@@ -29,7 +34,7 @@ namespace ApiFrameWork.Log
         {
             lock (obj)
             {
-                return _log;
+                return _log.Value;
             }
         }
 
@@ -56,6 +61,7 @@ namespace ApiFrameWork.Log
         {
             FileName = fileName;
             FileFolder = fileFolder;
+            _encoderQuality = LaunchConfig.GetInstance().EncoderQuality;
             if (!string.IsNullOrEmpty(fileFolder) && !System.IO.Directory.Exists(fileFolder))
             {
                 Directory.CreateDirectory(fileFolder);
@@ -73,6 +79,21 @@ namespace ApiFrameWork.Log
             _store.Add(new LogStore{LogType=LogType.StringContent,Content=string.Empty,Section=section});
         }
 
+        internal void Insert(string content)
+        {
+            _store.Insert(0,new LogStore{LogType=LogType.StringContent, Content=content});
+        }
+
+        internal void InsertHTML(string content)
+        {
+            _store.Insert(0, new LogStore { LogType = LogType.HtmlContent, Content = content });
+        }
+
+
+        internal void InsertZeroSpace()
+        {
+            _store.Add(new LogStore { LogType = LogType.ZeroSpace });
+        }
         public void Info(string content)
         {
             _store.Add(new LogStore { LogType = LogType.StringContent, Content = content });
@@ -95,19 +116,63 @@ namespace ApiFrameWork.Log
         }
         public void Info(byte[] bytes)
         {
+            string dt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssK");
             string name = GenrandomFilename();
+            string md5hash = string.Empty;
+
             using (MemoryStream ms = new MemoryStream(bytes))
             {
                 using (Image image = System.Drawing.Image.FromStream(ms))
                 {
+                    ms.Flush();
+                    if(_encoderQuality == 10086L || !image.RawFormat.Equals(ImageFormat.Png))
+                    {
+                        image.Save($"{FileFolder}\\Pic\\{name}",System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                    else
+                    {
+                        bool usejpeg = false;
+                        EncoderParameters encoderParameters = new EncoderParameters(1);
+                        encoderParameters.Param[0]= new EncoderParameter (System.Drawing.Imaging.Encoder.Quality,_encoderQuality);
 
-                    image.Save($"{FileFolder}\\Pic\\{name}");
+                        var jepgencoder = ImageCodecInfo.GetImageEncoders().FirstOrDefault(t => t.FormatID == ImageFormat.Jpeg.Guid);
+                        using (System.IO.MemoryStream outms = new MemoryStream ())
+                        {
+                            image.Save(outms,jepgencoder,encoderParameters);
+
+                            byte[] bytearrayImage = outms.ToArray ();
+                            if (bytearrayImage.Length < bytes.Length)
+                            {
+                                usejpeg = true;
+                            }
+                        }
+
+                        if (usejpeg)
+                        {
+                            image.Save($"{FileFolder}\\Pic\\{name}", jepgencoder, encoderParameters);
+                        }
+                        else
+                        {
+                            image.Save($"{FileFolder}\\Pic\\{name}", System.Drawing.Imaging.ImageFormat.Png);
+                        }
+                    }
+                      
 
 
                 }
 
             }
-            _store.Add(new LogStore { LogType = LogType.Picture, Content = name });
+            using(System.IO.FileStream fs = new FileStream ($"{FileFolder}\\Pic\\{name}", System.IO.FileMode.Open))
+            {
+                using (var crypto = System.Security.Cryptography.MD5.Create())
+                {
+                    var data = crypto.ComputeHash(fs);
+                    md5hash = BitConverter.ToString(data).Replace("-", "").ToLower();
+                }
+            }
+
+
+            _store.Add(new LogStore { LogType = LogType.Picture, Content = name, Dt=dt, Hash=md5hash });
         }
         public void Dispose()
         {
@@ -131,6 +196,10 @@ namespace ApiFrameWork.Log
         {
             get; set;
         }
+        public string Dt
+            { get; set; }
+        public string Hash
+            { get; set; }
 
         public Style Style
         {
@@ -139,7 +208,7 @@ namespace ApiFrameWork.Log
     }
     public enum LogType
     {
-        StringContent, Picture
+        StringContent, Picture,HtmlContent, ZeroSpace
     }
 
     public enum Style

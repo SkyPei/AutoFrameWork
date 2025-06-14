@@ -1,9 +1,9 @@
 using System;
 using System.IO;
 using System.Text.RegularExpressions;
-using ApiFrameWork.Schema;
+using AutoFrameWork.Schema;
 
-namespace ApiFrameWork.Command
+namespace AutoFrameWork.Command
 {
     public class GenCommand : BaseCommand
     {
@@ -28,12 +28,12 @@ namespace ApiFrameWork.Command
 
         }
 
-        public override void Run()
+        public override bool Run()
         {
             throw new System.NotImplementedException();
         }
 
-        public override void Run(string args)
+        public override bool Run(string args)
         {
             string data = string.Empty;
             Regex regjson1 = new Regex("(^|[ ]+)batch[ ]+\\\"[\\S ]+\\\"", RegexOptions.IgnoreCase);
@@ -92,7 +92,7 @@ namespace ApiFrameWork.Command
             }
 
             Console.WriteLine("Template is generated.");
-
+            return true;
         }
     }
 }

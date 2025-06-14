@@ -7,7 +7,7 @@ using System.Linq;
 using System;
 using System.Reflection;
 
-namespace ApiFrameWork.Utility
+namespace AutoFrameWork.Utility
 {
     public static class RestFulRequest
     {
@@ -27,7 +27,7 @@ namespace ApiFrameWork.Utility
         private static void Log(this HttpWebRequest request, string content = "")
         {
 
-            Log.Log log = ApiFrameWork.Log.Log.GetLog();
+            Log.Log log = AutoFrameWork.Log.Log.GetLog();
             log.Info("---------------------Request-------------------\r\n");
             log.Info($"{request.Method.ToUpper()} {request.RequestUri} HTTP/{request.ProtocolVersion}\r\n");
             if (request.KeepAlive)
@@ -75,7 +75,7 @@ namespace ApiFrameWork.Utility
 
         private static void Log(this HttpWebResponse response)
         {
-            Log.Log log = ApiFrameWork.Log.Log.GetLog();
+            Log.Log log = AutoFrameWork.Log.Log.GetLog();
 
             log.Info("---------------------Response-------------------\r\n");
             log.Info($"HTTP/{response.ProtocolVersion} {((int)response.StatusCode).ToString()} {response.StatusDescription}\r\n");
@@ -118,7 +118,7 @@ namespace ApiFrameWork.Utility
         {
             if (string.IsNullOrEmpty(request.UserAgent))
             {
-                request.UserAgent = "ApiFrameWork/1.0.0(.net Core 2.1)";
+                request.UserAgent = "AutoFrameWork/1.0.0(.net Core 2.1)";
             }
             HttpWebResponse response = null;
             request.Log();
@@ -152,7 +152,7 @@ namespace ApiFrameWork.Utility
 
             if (string.IsNullOrEmpty(request.UserAgent))
             {
-                request.UserAgent = "ApiFrameWork/1.0.0(.net Core 2.1)";
+                request.UserAgent = "AutoFrameWork/1.0.0(.net Core 2.1)";
             }
             HttpWebResponse response = null;
             if ("Get" != request.Method)
@@ -221,7 +221,7 @@ namespace ApiFrameWork.Utility
         {
 
             string output = string.Empty;
-            ApiFrameWork.Log.ResponseContent contents = ApiFrameWork.Log.ResponseContent.GetInstance();
+            AutoFrameWork.Log.ResponseContent contents = AutoFrameWork.Log.ResponseContent.GetInstance();
             if (contents.List.Keys.Contains(response))
             {
                 return contents.List[response];
@@ -245,6 +245,18 @@ namespace ApiFrameWork.Utility
 
         }
 
+        public static string GetDesc(this Schema.UploadStatus status)
+        {
+            var enumMemberAttributes = status.GetType().GetField(status.ToString()).GetCustomAttributes(typeof(System.Runtime.Serialization.EnumMemberAttribute),false) as System.Runtime.Serialization.EnumMemberAttribute[];
+            if(enumMemberAttributes ==null || enumMemberAttributes.Length==0)
+            {
+                return status.ToString();
+            }
+            else
+            {
+                return enumMemberAttributes[0].Value;
+            }
+        }
 
     }
 

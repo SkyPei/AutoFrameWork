@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ApiFrameWork.Command
+namespace AutoFrameWork.Command
 {
     public class QCommand : BaseCommand
     {
@@ -10,13 +10,13 @@ namespace ApiFrameWork.Command
         {
              Console.WriteLine("Quits the command interpreter.");
         }
-        public override void Run()
+        public override bool Run()
         {
 
-            Environment.Exit(0);
+            return false;
         }
 
-        public override void Run(string args)
+        public override bool Run(string args)
         {
             throw new NotImplementedException();
         }

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.Serialization;
 
-namespace ApiFrameWork
+namespace AutoFrameWork
 {
     public class AFWDictionary<TValue> : Dictionary<string, TValue>
     {

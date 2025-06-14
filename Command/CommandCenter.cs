@@ -1,21 +1,66 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using ApiFrameWork.Exception;
-using ApiFrameWork.Schema;
+using AutoFrameWork.Exception;
+using AutoFrameWork.Schema;
 using System.Linq;
 using System.Text.RegularExpressions;
+using NPOI.Util;
 
 
-namespace ApiFrameWork.Command
+namespace AutoFrameWork.Command
 {
     internal class CommandCenter
     {
-        internal static void Startup(List<System.Type> list, string dataFile, string sheetName)
+
+
+        internal static void Startup(List<System.Type> list, LaunchConfig config, string com, object input)
         {
-            while (true)
+            if (string.IsNullOrEmpty(com))
             {
-                var input = Console.ReadLine().ToLower();
+                Console.WriteLine("command is blank!");
+                return;
+            }
+
+            Assembly assembly=typeof(BaseCommand).Assembly;
+            var command =assembly.GetTypes().FirstOrDefault(t => t.Name.ToLower()==$"{com}command" && t.GetInterface("IJsonCommand")!=null);
+            if (command == null)
+            {
+                Console.WriteLine($"{com} is not an invalid command");
+                return;
+            }
+            BaseCommand bc = (BaseCommand) Activator.CreateInstance(command,null);
+            bc.List = list;
+            bc.DataFile = config.DataFile;
+            bc.SheetName = config.SheetName;
+            bc.Upload = config._upload;
+            try
+            {
+                ((IJsonCommand)bc).Run(input);
+            }
+            catch (NotImplementedException e)
+            {
+                Console.WriteLine("Invalid Command args");
+            }
+            catch(CommandPaseException e)
+            {
+                Console.WriteLine(e.Message);
+            }
+            catch(System.Exception e)
+            {
+                Console.WriteLine(e.Message);
+            }
+
+        }
+        internal static void Startup(List<System.Type> list, LaunchConfig config, string input)
+        {
+            bool continueflag = true;
+            while (continueflag)
+            {
+                if (string.IsNullOrEmpty(input))
+                {
+                    input = Console.ReadLine().ToLower();
+                }
                 var inputs = input.Split(" ", 2, StringSplitOptions.RemoveEmptyEntries);
                 if (inputs.Length == 0)
                 {
@@ -32,8 +77,9 @@ namespace ApiFrameWork.Command
 
                 BaseCommand bc = (BaseCommand)Activator.CreateInstance(command, null);
                 bc.List = list;
-                bc.DataFile = dataFile;
-                bc.SheetName = sheetName;
+                bc.DataFile = config.DataFile;
+                bc.SheetName = config.SheetName;
+                bc.Upload = config._upload;
                 try
                 {
                     System.Text.RegularExpressions.Regex reg = new System.Text.RegularExpressions.Regex(@"(^|[ ]+)--help($|[ ]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -58,57 +104,23 @@ namespace ApiFrameWork.Command
                                 {
                                     Regex regdata = new Regex($"(?<=[ ]+--{arg.Name}[ ]*=[ ]*)\\\"[\\S ]+\\\"", RegexOptions.IgnoreCase);
                                     string data = regdata.Match(inputargs).Value;
-                                    arg.SetValue(bc,data.Substring(1,data.Length-2));
+                                    arg.SetValue(bc, data.Substring(1, data.Length - 2));
 
                                 }
                                 else
                                 {
                                     Regex regdata = new Regex($"(?<=[ ]+--{arg.Name}[ ]*=[ ]*)[\\S]+", RegexOptions.IgnoreCase);
                                     string data = regdata.Match(inputargs).Value;
-                                    arg.SetValue(bc,data);
+                                    arg.SetValue(bc, data);
 
                                 }
                             }
                         }
 
 
-                        bc.Run(inputargs);
+                        continueflag = bc.Run(inputargs);
                     }
-                    // else
-                    // {
-                    //     string option = inputs[1].Substring(1);
-                    //     List<string> optionValues = new List<string>();
-                    //     for (int i = 2; i < inputs.Length; i++)
-                    //     {
-                    //         if (inputs[i].StartsWith("-"))
-                    //         {
-                    //             break;
-                    //         }
 
-                    //         optionValues.Add(inputs[i]);
-                    //     }
-
-
-
-                    //     var method = bc.GetType().GetMethods().FirstOrDefault(t => t.Name.ToLower() == $"{option}Option" && t.GetParameters().Length == optionValues.Count);
-                    //     if (method == null)
-                    //     {
-                    //         Console.WriteLine($"-{option} is not an invalid command option");
-                    //     }
-                    //     else
-                    //     {
-                    //         if (optionValues.Count == 0)
-                    //         {
-                    //             method.Invoke(bc, null);
-                    //         }
-                    //         else
-                    //         {
-                    //             method.Invoke(bc, optionValues.ToArray());
-
-                    //         }
-                    //     }
-
-                    // }
                 }
                 catch (NotImplementedException e)
                 {

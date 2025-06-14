@@ -1,9 +1,10 @@
 using System;
+using System.Runtime.Serialization;
 
-namespace ApiFrameWork.Schema
+namespace AutoFrameWork.Schema
 {
-    [AttributeUsage(AttributeTargets.Class ,  AllowMultiple = false)]
-     public class ScriptAttribute : Attribute
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
+    public class ScriptAttribute : Attribute
     {
         public string DisplayName
         {
@@ -17,7 +18,7 @@ namespace ApiFrameWork.Schema
 
         public string App
         {
-            get;set;
+            get; set;
         }
 
         public bool Visible
@@ -32,23 +33,64 @@ namespace ApiFrameWork.Schema
 
         public string DataFile
         {
-            get;set;
+            get; set;
         }
         public string SheetName
         {
-            get;set;
+            get; set;
         }
 
         public string[] TestCaseId
         {
-            get;set;
+            get; set;
+        }
+
+        public Type DataSource
+        {
+            get; set; 
         }
     }
 
 
-    [AttributeUsage(AttributeTargets.Field,  AllowMultiple = false)]
-     public class InjectAttribute : Attribute
+    [AttributeUsage(AttributeTargets.Field, AllowMultiple = false)]
+    public class InjectAttribute : Attribute
     {
-       
+
+    }
+
+    [AttributeUsage(AttributeTargets.Field, AllowMultiple = false)]
+    public class DataSourceInAttribute : Attribute
+    {
+
+    }
+
+    [AttributeUsage(AttributeTargets.Field, AllowMultiple = false)]
+    public class DataSourceOutAttribute : Attribute
+    {
+
+    }
+
+    public abstract class DataSource
+    {
+        public abstract System.Collections.IList ReadDataSource(string scriptname, AFWDictionary<string> row);
+        public virtual void WriteDataSource(string scriptname, AFWDictionary<string> row, object valuie, ScriptStatus status)
+        {
+
+        }
+    }
+
+    public enum ScriptStatus
+    {
+        Pass,
+        Fail,
+        Error
+    }
+
+    public enum UploadStatus
+    {
+        [EnumMember(Value ="Not Enabled")]
+        NotEnabled,
+        Pass,
+        Error
     }
 }

@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace ApiFrameWork.Schema
+namespace AutoFrameWork.Schema
 {
     public class BatchTemplate
     {
@@ -22,6 +22,12 @@ namespace ApiFrameWork.Schema
         {
             get; set;
         }
+
+        public bool IsAsync
+        { get; set; } = false;
+
+        public int MaxThreads
+        { get; set; } = 10;
     }
 
     public class BatchGroup
@@ -34,6 +40,8 @@ namespace ApiFrameWork.Schema
         {
             get; set;
         }
+        public string SetId
+            { get; set; }
     }
 
     public class BatchGroupItem
@@ -52,5 +60,18 @@ namespace ApiFrameWork.Schema
             get; set;
         } = "";
 
+        private string _scriptid = null;
+
+        public string scriptid
+        {
+            get => _scriptid;
+            set
+            {
+                if(!string.IsNullOrWhiteSpace(value))
+                {
+                    _scriptid = value;
+                }
+            }
+        }
     }
 }

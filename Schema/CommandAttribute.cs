@@ -1,6 +1,6 @@
 using System;
 
-namespace ApiFrameWork.Schema
+namespace AutoFrameWork.Schema
 {
     public class CommandAttribute: Attribute
     {

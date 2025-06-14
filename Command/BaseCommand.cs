@@ -1,9 +1,13 @@
 using System.Collections.Generic;
 
-namespace ApiFrameWork.Command
+namespace AutoFrameWork.Command
 {
     public abstract class BaseCommand
     {
+        internal IResultUpload Upload
+        {
+            get; set; 
+        }
         internal List<System.Type> List
         {
             get;set;
@@ -24,7 +28,7 @@ namespace ApiFrameWork.Command
         }
        
        public abstract void Help();
-       public  abstract void Run();
-       public abstract  void  Run(string args);
+       public  abstract bool Run();
+       public abstract  bool  Run(string args);
     }
 }

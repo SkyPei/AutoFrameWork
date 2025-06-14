@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using ApiFrameWork.Schema;
+using AutoFrameWork.Schema;
 
-namespace ApiFrameWork.Command
+namespace AutoFrameWork.Command
 {
     public class LlCommand : BaseCommand
     {
@@ -13,7 +13,7 @@ namespace ApiFrameWork.Command
             Console.WriteLine("Displays a list of scripts in project.");
         }
 
-        public override void Run()
+        public override bool Run()
         {
             foreach (var item in List)
             {
@@ -22,9 +22,10 @@ namespace ApiFrameWork.Command
                 Console.WriteLine(name);
             }
              Console.Write("\r\n");
+            return true;
         }
 
-        public override void Run(string args)
+        public override bool Run(string args)
         {
             throw new System.NotImplementedException();
         }

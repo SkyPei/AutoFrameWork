@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Net;
 
-namespace ApiFrameWork.Log
+namespace AutoFrameWork.Log
 {
     internal class ResponseContent: System.IDisposable
     {

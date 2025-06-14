@@ -1,6 +1,6 @@
 using System.Data;
 
-namespace ApiFrameWork
+namespace AutoFrameWork
 {
     public interface IScript
     {

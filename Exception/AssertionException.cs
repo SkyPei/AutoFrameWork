@@ -1,4 +1,4 @@
-namespace ApiFrameWork.Exception
+namespace AutoFrameWork.Exception
 {
     public class AssertionException: System.Exception
     {

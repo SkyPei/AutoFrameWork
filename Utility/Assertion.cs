@@ -1,6 +1,6 @@
 using System;
 
-namespace ApiFrameWork.Utility
+namespace AutoFrameWork.Utility
 {
     public static class Assertion
     {

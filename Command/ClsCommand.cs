@@ -1,6 +1,6 @@
 using System;
 
-namespace ApiFrameWork.Command
+namespace AutoFrameWork.Command
 {
     public class ClsCommand : BaseCommand
     {
@@ -9,12 +9,13 @@ namespace ApiFrameWork.Command
             Console.WriteLine("Clear terminal screen.");
         }
 
-        public override void Run()
+        public override bool Run()
         {
            Console.Clear();
+            return true;
         }
 
-        public override void Run(string args)
+        public override bool Run(string args)
         {
             throw new System.NotImplementedException();
         }
