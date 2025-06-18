@@ -5,7 +5,7 @@
 	  <PlatformTarget>x64</PlatformTarget>
 	  <Title>AutoFrameWork</Title>
 	  <Authors>Sky Pei</Authors>
-	  <Description>C# Automation framework for UI &amp; API testing</Description>
+	  <Description>C# Automation framework for UI &amp; API testing &amp; Mobile testing</Description>
 	  <Copyright>Copyright 2019</Copyright>
 	  <PackageTags>Automation Testing</PackageTags>
   </PropertyGroup>
