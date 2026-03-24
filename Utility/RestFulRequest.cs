@@ -6,6 +6,10 @@ using Newtonsoft.Json;
 using System.Linq;
 using System;
 using System.Reflection;
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Threading;
+using Org.BouncyCastle.Asn1.Ocsp;
 
 namespace AutoFrameWork.Utility
 {
@@ -116,9 +120,10 @@ namespace AutoFrameWork.Utility
         }
         public static HttpWebResponse Send(this HttpWebRequest request)
         {
+              var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).ProductVersion;
             if (string.IsNullOrEmpty(request.UserAgent))
             {
-                request.UserAgent = "AutoFrameWork/1.0.0(.net Core 2.1)";
+                request.UserAgent = $"AutoFrameWork/{version}(.net6.0)";
             }
             HttpWebResponse response = null;
             request.Log();
@@ -150,9 +155,10 @@ namespace AutoFrameWork.Utility
         public static HttpWebResponse Send(this HttpWebRequest request, string content, Encoding encoding)
         {
 
+               var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).ProductVersion;
             if (string.IsNullOrEmpty(request.UserAgent))
             {
-                request.UserAgent = "AutoFrameWork/1.0.0(.net Core 2.1)";
+                request.UserAgent = $"AutoFrameWork/{version}(.net6.0)";
             }
             HttpWebResponse response = null;
             if ("Get" != request.Method)
@@ -221,22 +227,26 @@ namespace AutoFrameWork.Utility
         {
 
             string output = string.Empty;
-            AutoFrameWork.Log.ResponseContent contents = AutoFrameWork.Log.ResponseContent.GetInstance();
-            if (contents.List.Keys.Contains(response))
-            {
-                return contents.List[response];
-            }
-            else
-            {
-
-                using (StreamReader reader = new StreamReader(response.GetResponseStream()))
+           AutoFrameWork.Log.ResponseContent contents = AutoFrameWork.Log.ResponseContent.GetInstance();
+            
+                if (contents.List.Keys.Contains(response))
+                {
+                    var readerResponse =contents.List[response];
+                    contents.List.Remove(response);
+                    return readerResponse;
+                }
+                else
                 {
 
-                    output = reader.ReadToEnd();
-                    contents.List.Add(response, output);
+                    using (StreamReader reader = new StreamReader(response.GetResponseStream()))
+                    {
 
+                        output = reader.ReadToEnd();
+                        contents.List.Add(response, output);
+
+                    }
                 }
-            }
+            
 
 
 
@@ -247,8 +257,8 @@ namespace AutoFrameWork.Utility
 
         public static string GetDesc(this Schema.UploadStatus status)
         {
-            var enumMemberAttributes = status.GetType().GetField(status.ToString()).GetCustomAttributes(typeof(System.Runtime.Serialization.EnumMemberAttribute),false) as System.Runtime.Serialization.EnumMemberAttribute[];
-            if(enumMemberAttributes ==null || enumMemberAttributes.Length==0)
+            var enumMemberAttributes = status.GetType().GetField(status.ToString()).GetCustomAttributes(typeof(System.Runtime.Serialization.EnumMemberAttribute), false) as System.Runtime.Serialization.EnumMemberAttribute[];
+            if (enumMemberAttributes == null || enumMemberAttributes.Length == 0)
             {
                 return status.ToString();
             }
@@ -258,6 +268,8 @@ namespace AutoFrameWork.Utility
             }
         }
 
+
+
     }
 
 
@@ -266,5 +278,6 @@ namespace AutoFrameWork.Utility
         Get, Post, Put, Delete, Head, Trace, Options
     }
 
+    
 
 }

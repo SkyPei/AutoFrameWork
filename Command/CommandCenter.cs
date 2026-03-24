@@ -64,6 +64,7 @@ namespace AutoFrameWork.Command
                 var inputs = input.Split(" ", 2, StringSplitOptions.RemoveEmptyEntries);
                 if (inputs.Length == 0)
                 {
+                    input=null;
                     continue;
                 }
                 string comm = inputs[0].Trim();
@@ -72,6 +73,7 @@ namespace AutoFrameWork.Command
                 if (command == null)
                 {
                     Console.WriteLine($"{comm} is not an invalid command");
+                    input=null;
                     continue;
                 }
 
@@ -85,11 +87,13 @@ namespace AutoFrameWork.Command
                     System.Text.RegularExpressions.Regex reg = new System.Text.RegularExpressions.Regex(@"(^|[ ]+)--help($|[ ]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     if (inputs.Length == 1)
                     {
-                        bc.Run();
+                       continueflag= bc.Run();
+                       input=null;
                     }
                     else if (reg.IsMatch(inputs[1].Trim()))
                     {
                         bc.Help();
+                        input=null;
                     }
                     else //(!inputs[1].StartsWith("-"))
                     {
@@ -119,22 +123,26 @@ namespace AutoFrameWork.Command
 
 
                         continueflag = bc.Run(inputargs);
+                        input=null;
                     }
 
                 }
                 catch (NotImplementedException e)
                 {
                     Console.WriteLine("Invalid Command args");
+                    input=null;
                     continue;
                 }
                 catch (CommandPaseException e)
                 {
                     Console.WriteLine(e.Message);
+                    input=null;
                     continue;
                 }
                 catch (System.Exception e)
                 {
                     Console.WriteLine(e.Message);
+                    input=null;
                     continue;
                 }
 

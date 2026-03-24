@@ -177,7 +177,7 @@ namespace AutoFrameWork.Log
         public void Dispose()
         {
             _store.Clear();
-            _log = null;
+            _log.Value = null;
         }
     }
 

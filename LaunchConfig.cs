@@ -169,7 +169,32 @@ namespace AutoFrameWork
 
     public interface IResultUpload
     {
-        bool NeedUpload(string scriptname, string reportpath, string caseid, string reportname, string scriptid, ScriptStatus status, dynamic additionalInfo);
+        bool NeedUpload(ResultMetadata metadata);
         void Upload();
+    }
+
+    public class ResultMetadata
+    { 
+        public string ScriptName
+        { get; set; }
+        public string ReportPath
+        { get; set; }
+        public string CaseId
+        { get; set; }
+        public string ReportName
+        { get; set; }
+        public string ScriptId
+        { get; set; }
+        public ScriptStatus Status
+        { get; set; }
+
+        public string App{get;set;}
+
+        public string Lob{get;set;}
+        public dynamic AdditionalInfo
+        { get; set; }
+
+        public bool IsDataPrepare
+        { get; set; }
     }
 }

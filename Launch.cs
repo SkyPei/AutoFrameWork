@@ -1,23 +1,32 @@
 using System;
 using System.Reflection;
 using AutoFrameWork.Command;
-using AutoFrameWork.Utility;
 using System.Linq;
-using System.Security.Cryptography.X509Certificates;
 
 
 namespace AutoFrameWork
 {
+
+//public interface IConfig
+//{
+//    public void Config(LaunchConfig config);
+
+//}
+
+
     public class Launch
     {
         private LaunchConfig config;
        
        
-        public Launch()
-        {
-            config = LaunchConfig.GetInstance();
+       
+        //public Launch(IConfig iconfig)
+        //{
+        //    config = LaunchConfig.GetInstance();
+        //    this.iconfig = iconfig;
+        //    iconfig.Config(config);
           
-        }
+        //}
 
         public Launch Config(Action<LaunchConfig> doConfig)
         {

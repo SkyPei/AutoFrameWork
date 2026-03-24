@@ -7,7 +7,7 @@
             "type": "process",
             "args": [
                 "build",
-                "${workspaceFolder}/ApiFrameWork.csproj"
+                "${workspaceFolder}\\AutoFrameWork.csproj"
             ],
             "problemMatcher": "$msCompile"
         }

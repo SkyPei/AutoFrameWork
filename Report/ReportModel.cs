@@ -419,7 +419,8 @@ namespace AutoFrameWork.Report
                 var upload = _upload.DeepCopy() as IResultUpload;
                 try
                 {
-                    string displayname = script.GetType().GetCustomAttribute<ScriptAttribute>().DisplayName;
+                     ScriptAttribute attr = script.GetType().GetCustomAttribute<ScriptAttribute>();
+                    string displayname = attr.DisplayName;
 
                     var sai = script.PropertyValue<DynamicPropertyView>("AdditionalInfo");
                     int duration = detail.Duration.Days * 24 * 60 * 60 + detail.Duration.Hours * 60 * 60 + detail.Duration.Minutes * 60 + detail.Duration.Seconds;
@@ -428,7 +429,22 @@ namespace AutoFrameWork.Report
                     {
                         sai.SetMember("BatchMode", "Y");
                     }
-                    bool needupload = upload.NeedUpload(displayname, detailreport, script.PropertyValue<string>("CaseId"), script.PropertyValue<string>("ReportName"), script.PropertyValue<string>("ScriptId"), detail.Status, sai);
+                    var metadata = new ResultMetadata()
+                    {
+                        ScriptName = displayname,
+                        ReportPath = detailreport,
+                        CaseId = script.PropertyValue<string>("CaseId"),
+                        ReportName = script.PropertyValue<string>("ReportName"),
+                        ScriptId = script.PropertyValue<string>("ScriptId"),
+                        Status = detail.Status,
+                        App = attr.App,
+                        Lob = attr.LOB,
+                        IsDataPrepare=attr.IsDataPrepare,
+                        AdditionalInfo = sai
+                        
+                        
+                    };
+                    bool needupload = upload.NeedUpload(metadata);
                     if (needupload)
                     {
                         upload.Upload();
@@ -529,7 +545,7 @@ namespace AutoFrameWork.Report
                     sb.AppendLine($"</td>");
                     sb.AppendLine($"<td align='center'>{detail.CaseId}</td>");
                     sb.AppendLine($"<td align='center'>{detail.Duration.Days * 24 * 60 * 60 + detail.Duration.Hours * 60 * 60 + detail.Duration.Minutes * 60 + detail.Duration.Seconds}s</td>");
-                    sb.AppendLine($"<td colspan='4' align='center'>");
+                    sb.AppendLine($"<td colspan='5' align='center'>");
                     if (detail.Status== ScriptStatus.Pass)
                     {
                         sb.AppendLine($"<span class='label label-success success'>pass</span>");

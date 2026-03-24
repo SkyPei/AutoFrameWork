@@ -49,6 +49,10 @@ namespace AutoFrameWork.Schema
         {
             get; set; 
         }
+        public bool IsDataPrepare
+        {
+            get; set;
+        }=false;
     }
 
 

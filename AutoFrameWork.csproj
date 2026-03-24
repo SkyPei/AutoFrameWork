@@ -8,6 +8,7 @@
 	  <Description>C# Automation framework for UI &amp; API testing &amp; Mobile testing</Description>
 	  <Copyright>Copyright 2019</Copyright>
 	  <PackageTags>Automation Testing</PackageTags>
+    <version>1.0.9</version>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="NPOI" Version="2.6.2" />

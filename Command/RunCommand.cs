@@ -121,7 +121,7 @@ namespace AutoFrameWork.Command
                         Console.WriteLine($"Script:{groupitem.name}");
                         string currentfile = groupitem.File;
                         string currentsheet = groupitem.Sheet;
-                        var scriptinfo = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == groupitem.name)?.GetCustomAttribute<Schema.ScriptAttribute>();
+                        var scriptinfo = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == groupitem.name?.ToLower())?.GetCustomAttribute<Schema.ScriptAttribute>();
                         if (scriptinfo == null)
                         {
                             Console.WriteLine("script is not found, please double check.");
@@ -188,7 +188,7 @@ namespace AutoFrameWork.Command
                             {
                                 string currentfile = batch.Groups[0].File;
                                 string currentsheet = batch.Groups[0].Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == batch.Groups[0].name?.ToLower());
 
                                 if (type == null)
                                 {
@@ -242,7 +242,7 @@ namespace AutoFrameWork.Command
                             {
                                 string currentfile = batch.Groups[0].File;
                                 string currentsheet = batch.Groups[0].Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == batch.Groups[0].name?.ToLower());
                                 if (type == null)
                                 {
                                     Console.WriteLine($"Not Found Script {{{batch.Groups[0].name}}}");
@@ -313,7 +313,7 @@ namespace AutoFrameWork.Command
                                 }
                                 string currentfile = model.File;
                                 string currentsheet = model.Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == model.Name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == model.Name?.ToLower());
                                 if (type == null)
                                 {
                                     Console.WriteLine($"Not Found Script {{{model.Name}}}");
@@ -625,8 +625,8 @@ namespace AutoFrameWork.Command
                                                     script.PropertyAssignment("ScriptId", caseiddata.Value);
                                                 }
                                             }
-                                            log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
-                                            log.InsertHTML($"<div>{model.Name}</div>\r\n");
+                                           // log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                           // log.InsertHTML($"<div>{model.Name}</div>\r\n");
 
                                             scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
 
@@ -717,7 +717,7 @@ namespace AutoFrameWork.Command
                                         }
                                         string currentfile = model.File;
                                         string currentsheet = model.Sheet;
-                                        var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == model.Name);
+                                        var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == model.Name?.ToLower());
                                         if (type == null)
                                         {
                                             Console.WriteLine($"Not Found Script {{{model.Name}}}");
@@ -1029,8 +1029,8 @@ namespace AutoFrameWork.Command
                                                             script.PropertyAssignment("ScriptId", caseiddata.Value);
                                                         }
                                                     }
-                                                    log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
-                                                    log.InsertHTML($"<div>{model.Name}</div>\r\n");
+                                                  //  log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                  //  log.InsertHTML($"<div>{model.Name}</div>\r\n");
 
                                                     scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
 
@@ -1106,7 +1106,7 @@ namespace AutoFrameWork.Command
                             {
                                 string currentfile = batch.Groups[0].File;
                                 string currentsheet = batch.Groups[0].Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == batch.Groups[0].name?.ToLower());
 
                                 if (type == null)
                                 {
@@ -1149,7 +1149,7 @@ namespace AutoFrameWork.Command
                                         DataSource ds = null;
                                         System.Collections.IList additionaldatasource = null;
 
-                                        var runtype = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == item.name);
+                                        var runtype = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == item.name?.ToLower());
                                         if (runtype == null)
                                         {
                                             Console.WriteLine($"Not found Scirpt {{{item.name}}}");
@@ -1462,8 +1462,8 @@ namespace AutoFrameWork.Command
                                                             script.PropertyAssignment("ScriptId", caseiddata.Value);
                                                         }
                                                     }
-                                                    log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
-                                                    log.InsertHTML($"<div>{item.name}</div>\r\n");
+                                                 //   log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                 //   log.InsertHTML($"<div>{item.name}</div>\r\n");
 
                                                     scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
 
@@ -1537,7 +1537,7 @@ namespace AutoFrameWork.Command
                             {
                                 string currentfile =item.File;
                                 string currentsheet = item.Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == item.name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == item.name?.ToLower());
                                 if (type == null)
                                 {
                                     Console.WriteLine($"Not Found Script {{{item.name}}}");
@@ -1853,8 +1853,8 @@ namespace AutoFrameWork.Command
                                                         script.PropertyAssignment("ScriptId", caseiddata.Value);
                                                     }
                                                 }
-                                                log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
-                                                log.InsertHTML($"<div>{item.name}</div>\r\n");
+                                               // log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                              //  log.InsertHTML($"<div>{item.name}</div>\r\n");
 
                                                 scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
 
@@ -1936,10 +1936,10 @@ namespace AutoFrameWork.Command
                     data = regdata.Match(args).Value;
                 }
 
-                var type =  List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == data);
+                var type =  List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == data);
                 if (type == null)
                 {
-                    throw new Exception.CommandPaseException($"Notr Found Script {{{data}}}");
+                    throw new Exception.CommandPaseException($"Not Found Script {{{data}}}");
                  
                 }
                 if (type.GetConstructors().Count() > 1)
@@ -2273,8 +2273,8 @@ namespace AutoFrameWork.Command
                                         script.PropertyAssignment("ScriptId", caseiddata.Value);
                                     }
                                 }
-                                log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
-                                log.InsertHTML($"<div>{data}</div>\r\n");
+                              //  log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                               // log.InsertHTML($"<div>{data}</div>\r\n");
 
                                 scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
 
@@ -2362,7 +2362,7 @@ namespace AutoFrameWork.Command
                         Console.WriteLine($"Script:{groupitem.name}");
                         string currentfile = groupitem.File;
                         string currentsheet = groupitem.Sheet;
-                        var scriptinfo = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == groupitem.name)?.GetCustomAttribute<Schema.ScriptAttribute>();
+                        var scriptinfo = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == groupitem.name?.ToLower())?.GetCustomAttribute<Schema.ScriptAttribute>();
                         if (scriptinfo == null)
                         {
                             Console.WriteLine("script is not found, please double check.");
@@ -2429,7 +2429,7 @@ namespace AutoFrameWork.Command
                             {
                                 string currentfile = batch.Groups[0].File;
                                 string currentsheet = batch.Groups[0].Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == batch.Groups[0].name?.ToLower());
 
                                 if (type == null)
                                 {
@@ -2483,7 +2483,7 @@ namespace AutoFrameWork.Command
                             {
                                 string currentfile = batch.Groups[0].File;
                                 string currentsheet = batch.Groups[0].Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == batch.Groups[0].name?.ToLower());
                                 if (type == null)
                                 {
                                     Console.WriteLine($"Not Found Script {{{batch.Groups[0].name}}}");
@@ -2554,7 +2554,7 @@ namespace AutoFrameWork.Command
                                 }
                                 string currentfile = model.File;
                                 string currentsheet = model.Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == model.Name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == model.Name?.ToLower());
                                 if (type == null)
                                 {
                                     Console.WriteLine($"Not Found Script {{{model.Name}}}");
@@ -2866,8 +2866,8 @@ namespace AutoFrameWork.Command
                                                     script.PropertyAssignment("ScriptId", caseiddata.Value);
                                                 }
                                             }
-                                            log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
-                                            log.InsertHTML($"<div>{model.Name}</div>\r\n");
+                                          //  log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                          //  log.InsertHTML($"<div>{model.Name}</div>\r\n");
 
                                             scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
 
@@ -2958,7 +2958,7 @@ namespace AutoFrameWork.Command
                                         }
                                         string currentfile = model.File;
                                         string currentsheet = model.Sheet;
-                                        var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == model.Name);
+                                        var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == model.Name?.ToLower());
                                         if (type == null)
                                         {
                                             Console.WriteLine($"Not Found Script {{{model.Name}}}");
@@ -3270,8 +3270,8 @@ namespace AutoFrameWork.Command
                                                             script.PropertyAssignment("ScriptId", caseiddata.Value);
                                                         }
                                                     }
-                                                    log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
-                                                    log.InsertHTML($"<div>{model.Name}</div>\r\n");
+                                                  //  log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                   // log.InsertHTML($"<div>{model.Name}</div>\r\n");
 
                                                     scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
 
@@ -3347,7 +3347,7 @@ namespace AutoFrameWork.Command
                             {
                                 string currentfile = batch.Groups[0].File;
                                 string currentsheet = batch.Groups[0].Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == batch.Groups[0].name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == batch.Groups[0].name?.ToLower());
 
                                 if (type == null)
                                 {
@@ -3390,7 +3390,7 @@ namespace AutoFrameWork.Command
                                         DataSource ds = null;
                                         System.Collections.IList additionaldatasource = null;
 
-                                        var runtype = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == item.name);
+                                        var runtype = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == item.name?.ToLower());
                                         if (runtype == null)
                                         {
                                             Console.WriteLine($"Not found Scirpt {{{item.name}}}");
@@ -3703,8 +3703,8 @@ namespace AutoFrameWork.Command
                                                             script.PropertyAssignment("ScriptId", caseiddata.Value);
                                                         }
                                                     }
-                                                    log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
-                                                    log.InsertHTML($"<div>{item.name}</div>\r\n");
+                                                  //  log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                                  //  log.InsertHTML($"<div>{item.name}</div>\r\n");
 
                                                     scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
 
@@ -3778,7 +3778,7 @@ namespace AutoFrameWork.Command
                             {
                                 string currentfile =item.File;
                                 string currentsheet = item.Sheet;
-                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName == item.name);
+                                var type = List.FirstOrDefault(t => t.GetCustomAttribute<Schema.ScriptAttribute>()?.DisplayName?.ToLower() == item.name?.ToLower());
                                 if (type == null)
                                 {
                                     Console.WriteLine($"Not Found Script {{{item.name}}}");
@@ -4094,8 +4094,8 @@ namespace AutoFrameWork.Command
                                                         script.PropertyAssignment("ScriptId", caseiddata.Value);
                                                     }
                                                 }
-                                                log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
-                                                log.InsertHTML($"<div>{item.name}</div>\r\n");
+                                               // log.Insert($"Current Script Id: {script.PropertyValue<string>("ScriptId")} \r\n");
+                                              //  log.InsertHTML($"<div>{item.name}</div>\r\n");
 
                                                 scripteventargs.ScriptId = script.PropertyValue<string>("ScriptId");
 
